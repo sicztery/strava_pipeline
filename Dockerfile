@@ -9,4 +9,3 @@ COPY . .
 RUN pip install -e .
 
 CMD ["python", "strava_client.py"]
-]
