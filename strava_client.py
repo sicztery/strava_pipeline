@@ -1,11 +1,11 @@
-from auth.auth_client import get_access_token
-from state.state_manager import load_state, save_state
-from api.strava_api import fetch_activities
-from ingest.filter import (
+from app.auth.auth_client import get_access_token
+from app.state.state_manager import load_state, save_state
+from app.api.strava_api import fetch_activities
+from app.ingest.filter import (
     filter_new_activities,
     extract_new_state
 )
-from ingest.raw_writer import write_raw
+from app.ingest.raw_writer import write_raw
 
 
 def main():
@@ -89,3 +89,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
