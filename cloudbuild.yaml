@@ -6,6 +6,7 @@ steps:
   args:
     [
       'build',
+      '--platform=linux/amd64',
       '-t',
       '${_IMAGE}',
       '.'
