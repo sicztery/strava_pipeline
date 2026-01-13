@@ -1,3 +1,7 @@
+import logging
+import uuid
+from datetime import datetime, timezone
+
 from app.auth.auth_client import get_access_token
 from app.state.state_manager import load_state, save_state
 from app.api.strava_api import fetch_activities
@@ -8,85 +12,211 @@ from app.ingest.filter import (
 from app.ingest.raw_writer import write_raw
 
 
+# ======================
+# LOGGING SETUP
+# ======================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s"
+)
+logger = logging.getLogger("strava_pipeline")
+
+
+def log_event(
+    run_id: str,
+    step: str,
+    status: str,
+    message: str,
+    extra: dict | None = None
+):
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "step": step,
+        "status": status,
+        "message": message,
+    }
+    if extra:
+        payload.update(extra)
+
+    logger.info(payload)
+
+
 def main():
-    # ======================
-    # 1️⃣ AUTH
-    # ======================
-    access_token = get_access_token()
+    run_id = str(uuid.uuid4())
 
-    # ======================
-    # 2️⃣ LOAD STATE
-    # ======================
-    last_seen_timestamp, last_seen_activity_id = load_state()
-
-    print(
-        "STATE:",
-        last_seen_timestamp,
-        last_seen_activity_id
+    log_event(
+        run_id,
+        step="PIPELINE_START",
+        status="OK",
+        message="Pipeline run started"
     )
 
-    # ======================
-    # 3️⃣ FETCH FROM STRAVA
-    # ======================
-    activities = fetch_activities(
-        access_token=access_token,
-        after_timestamp=last_seen_timestamp
-    )
+    try:
+        # ======================
+        # 1️⃣ AUTH
+        # ======================
+        log_event(run_id, "AUTH", "START", "Requesting access token")
+        access_token = get_access_token()
+        log_event(run_id, "AUTH", "OK", "Access token obtained")
 
-    print("Fetched from API:", len(activities))
+        # ======================
+        # 2️⃣ LOAD STATE
+        # ======================
+        log_event(run_id, "STATE_LOAD", "START", "Loading last state")
+        last_seen_timestamp, last_seen_activity_id = load_state()
 
-    if not activities:
-        print("API zwróciło 0 rekordów. Kończę.")
-        return
-
-    # ======================
-    # 4️⃣ FILTER NEW
-    # ======================
-    new_activities = filter_new_activities(
-        activities=activities,
-        last_seen_timestamp=last_seen_timestamp,
-        last_seen_activity_id=last_seen_activity_id
-    )
-
-    print("After filter:", len(new_activities))
-
-    if not new_activities:
-        print("Brak nowych aktywności. Kończę.")
-        return
-
-    # ======================
-    # 5️⃣ SORT (deterministycznie)
-    # ======================
-    new_activities_sorted = sorted(
-        new_activities,
-        key=lambda a: (
-            a["start_date"],
-            int(a["id"])
+        log_event(
+            run_id,
+            "STATE_LOAD",
+            "OK",
+            "State loaded",
+            {
+                "last_seen_timestamp": last_seen_timestamp,
+                "last_seen_activity_id": last_seen_activity_id,
+            }
         )
-    )
 
-    # ======================
-    # 6️⃣ WRITE RAW
-    # ======================
-    write_raw(new_activities_sorted)
+        # ======================
+        # 3️⃣ FETCH FROM STRAVA
+        # ======================
+        log_event(
+            run_id,
+            "FETCH_API",
+            "START",
+            "Fetching activities from Strava",
+            {"after_timestamp": last_seen_timestamp}
+        )
 
-    # ======================
-    # 7️⃣ UPDATE STATE
-    # ======================
-    new_timestamp, new_activity_id = extract_new_state(
-        new_activities_sorted
-    )
+        activities = fetch_activities(
+            access_token=access_token,
+            after_timestamp=last_seen_timestamp
+        )
 
-    save_state(new_timestamp, new_activity_id)
+        log_event(
+            run_id,
+            "FETCH_API",
+            "OK",
+            "Activities fetched",
+            {"fetched_count": len(activities)}
+        )
 
-    print(
-        "STATE UPDATED TO:",
-        new_timestamp,
-        new_activity_id
-    )
-    print("Pipeline run OK")
+        if not activities:
+            log_event(
+                run_id,
+                "PIPELINE_END",
+                "OK",
+                "No activities returned by API – nothing to process"
+            )
+            return
+
+        # ======================
+        # 4️⃣ FILTER NEW
+        # ======================
+        log_event(run_id, "FILTER", "START", "Filtering new activities")
+
+        new_activities = filter_new_activities(
+            activities=activities,
+            last_seen_timestamp=last_seen_timestamp,
+            last_seen_activity_id=last_seen_activity_id
+        )
+
+        log_event(
+            run_id,
+            "FILTER",
+            "OK",
+            "Filtering completed",
+            {"new_count": len(new_activities)}
+        )
+
+        if not new_activities:
+            log_event(
+                run_id,
+                "PIPELINE_END",
+                "OK",
+                "No new activities after filtering"
+            )
+            return
+
+        # ======================
+        # 5️⃣ SORT
+        # ======================
+        log_event(run_id, "SORT", "START", "Sorting activities deterministically")
+
+        new_activities_sorted = sorted(
+            new_activities,
+            key=lambda a: (
+                a["start_date"],
+                int(a["id"])
+            )
+        )
+
+        log_event(
+            run_id,
+            "SORT",
+            "OK",
+            "Sorting completed"
+        )
+
+        # ======================
+        # 6️⃣ WRITE RAW
+        # ======================
+        log_event(
+            run_id,
+            "WRITE_RAW",
+            "START",
+            "Writing RAW activities",
+            {"records": len(new_activities_sorted)}
+        )
+
+        write_raw(new_activities_sorted)
+
+        log_event(
+            run_id,
+            "WRITE_RAW",
+            "OK",
+            "RAW write completed"
+        )
+
+        # ======================
+        # 7️⃣ UPDATE STATE
+        # ======================
+        log_event(run_id, "STATE_UPDATE", "START", "Updating state")
+
+        new_timestamp, new_activity_id = extract_new_state(
+            new_activities_sorted
+        )
+
+        save_state(new_timestamp, new_activity_id)
+
+        log_event(
+            run_id,
+            "STATE_UPDATE",
+            "OK",
+            "State updated",
+            {
+                "new_timestamp": new_timestamp,
+                "new_activity_id": new_activity_id
+            }
+        )
+
+        log_event(
+            run_id,
+            "PIPELINE_END",
+            "OK",
+            "Pipeline run finished successfully"
+        )
+
+    except Exception as e:
+        log_event(
+            run_id,
+            "PIPELINE_ERROR",
+            "FAIL",
+            "Pipeline failed with exception",
+            {"error": str(e)}
+        )
+        raise
 
 
 if __name__ == "__main__":
     main()
-
