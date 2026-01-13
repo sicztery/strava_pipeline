@@ -29,21 +29,25 @@ def log_event(
     message: str,
     extra: dict | None = None
 ):
-    payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "run_id": run_id,
-        "step": step,
-        "status": status,
-        "message": message,
-    }
-    if extra:
-        payload.update(extra)
+    parts = [
+        run_id,
+        step,
+        status,
+        message
+    ]
 
-    logger.info(payload)
+    if extra:
+        extra_str = " | ".join(
+            f"{k}={v}" for k, v in extra.items()
+        )
+        parts.append(extra_str)
+
+    logger.info(" | ".join(parts))
+
 
 
 def main():
-    run_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())[:8]
 
     log_event(
         run_id,
@@ -220,3 +224,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
