@@ -2,7 +2,7 @@
 ################# STRAVA JACEG ELT PIPELINE 1.0 ####################.,
 #####                                                          #####  ',
                                                                         ,
-1. Worker scheme:                                                        ,
+1. Worker scheme (What's in Docker Container):                           ,
 
 strava_pipeline/app                                                       ,
 │
@@ -27,18 +27,18 @@ strava_pipeline/app                                                       ,
                                                                             ,
 
 
-2.
+2. Google Cloud Platform Deploy scheme:
 
 ┌──────────────────────────────────────────────────────────┐
 │                        GCP PROJECT                       │
 │                                                          │
 │  ┌──────────────────────┐        ┌────────────────────┐  │
-│  │  Cloud Scheduler     │        │   Secret Manager   │  │
-│  │  (CRON)              │        │                    │  │
+│  │  Cloud Scheduler     │        │  Secret/Parameter  │  │
+│  │  (CRON)              │        │  Manager           │  │
 │  │  - schedule: 2h      │        │  - STRAVA_CLIENT   │  │
 │  │  - HTTP trigger      │        │  - STRAVA_SECRET   │  │
 │  │                      │        │  - REFRESH_TOKEN   │  │
-│  └─────────┬────────────┘        │  - API VERSIONING  │  │
+│  └─────────┬────────────┘        │                    │  │
 │            │                     └─────────┬──────────┘  │
 │            │ HTTP POST / trigger           │             │
 │            ▼                               │             │
@@ -75,7 +75,7 @@ strava_pipeline/app                                                       ,
 │  │  │  │ RAW storage  │                  │               │
 │  │  │  │ jsonl / GCS  │                  │               │
 │  │  │  └──────────────┘                  │               │
-│  │  └─────────────────────────────────┘  │               │
+│  │  └────────────────────────────────────┼               │
 │  └───────────────────────────────────────┘               │
 │                                                          │
 │  ┌──────────────────────┐                                │
@@ -85,4 +85,5 @@ strava_pipeline/app                                                       ,
 │  └──────────────────────┘                                │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
+
 
