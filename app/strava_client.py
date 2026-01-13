@@ -110,7 +110,7 @@ def main():
                 run_id,
                 "PIPELINE_END",
                 "OK",
-                "No activities returned by API – nothing to process"
+                "No new activities returned by API – nothing to process"
             )
             return
 
@@ -224,4 +224,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
