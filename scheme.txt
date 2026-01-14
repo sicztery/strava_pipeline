@@ -1,8 +1,8 @@
 #####                                                          #####
-################# STRAVA JACEG ELT PIPELINE 1.0 ####################.,
+################# STRAVA JACEG ELT PIPELINE 1.1 ####################.,
 #####                                                          #####  ',
                                                                         ,
-1. Worker scheme (What's in Docker Container):                           ,
+1. Worker scheme (Inside Docker Container):                              ,
 
 strava_pipeline/app                                                       ,
 │
@@ -21,6 +21,7 @@ strava_pipeline/app                                                       ,
 │   ├── filter.py             # logika "if there's new activity"
 │   ├── raw_writer.py         # zapis RAW (append-only)
 │
+├── secrets.py                # not what you think
 ├── strava_client.py          # orchestrator (main)                         ,
 └── requirements.txt                                                        
 
@@ -85,5 +86,6 @@ strava_pipeline/app                                                       ,
 │  └──────────────────────┘                                │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
+
 
 
