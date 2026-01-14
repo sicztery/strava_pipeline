@@ -1,28 +1,31 @@
 import json
 import os
 import requests
+from pathlib import Path
+
+from app.secrets import get_secret
 
 # ======================
 # KONFIGURACJA
 # ======================
 
-CLIENT_ID = "194342"
-CLIENT_SECRET = "5c0df3e2a5475d158b6967e237de0d06bb6eba3d"
+PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
+if not PROJECT_ID:
+    raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
 
-AUTH_STATE_FILE = os.path.join(
-    os.path.dirname(__file__),
-    "auth_state.json"
-)
+CLIENT_ID = get_secret("strava-client-id", PROJECT_ID)
+CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
 
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 
+AUTH_STATE_FILE = Path(__file__).parent / "auth_state.json"
 
 # ======================
 # POMOCNICZE
 # ======================
 
 def _load_refresh_token() -> str:
-    if not os.path.exists(AUTH_STATE_FILE):
+    if not AUTH_STATE_FILE.exists():
         raise RuntimeError("Brak auth_state.json z refresh tokenem")
 
     with open(AUTH_STATE_FILE, "r") as f:
@@ -42,7 +45,6 @@ def _save_refresh_token(refresh_token: str) -> None:
             indent=2
         )
 
-
 # ======================
 # API MODUŁU (KONTRAKT)
 # ======================
@@ -50,7 +52,7 @@ def _save_refresh_token(refresh_token: str) -> None:
 def get_access_token() -> str:
     """
     Zwraca zawsze aktualny access token.
-    Refresh token jest automatycznie rotowany i zapisywany.
+    Refresh token jest automatycznie rotowany i zapisywany lokalnie.
     """
 
     refresh_token = _load_refresh_token()
@@ -67,10 +69,9 @@ def get_access_token() -> str:
     )
 
     response.raise_for_status()
-
     data = response.json()
 
-    # 🔑 ZAWSZE zapisujemy refresh token z odpowiedzi
+    # 🔁 OAuth Stravy ZAWSZE zwraca nowy refresh token
     if "refresh_token" in data:
         _save_refresh_token(data["refresh_token"])
 
@@ -78,4 +79,5 @@ def get_access_token() -> str:
         raise RuntimeError("Brak access_token w odpowiedzi Stravy")
 
     return data["access_token"]
+
 
