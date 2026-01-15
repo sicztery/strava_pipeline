@@ -1,4 +1,16 @@
+def _safe_latlng(value):
+    if (
+        isinstance(value, list)
+        and len(value) == 2
+    ):
+        return value[0], value[1]
+    return None, None
+
+
 def transform_activity(raw: dict) -> dict:
+    start_lat, start_lng = _safe_latlng(raw.get("start_latlng"))
+    end_lat, end_lng = _safe_latlng(raw.get("end_latlng"))
+
     return {
         "activity_id": raw["id"],
         "name": raw.get("name"),
@@ -23,12 +35,13 @@ def transform_activity(raw: dict) -> dict:
 
         "device_name": raw.get("device_name"),
 
-        "start_lat": raw.get("start_latlng", [None, None])[0],
-        "start_lng": raw.get("start_latlng", [None, None])[1],
-        "end_lat": raw.get("end_latlng", [None, None])[0],
-        "end_lng": raw.get("end_latlng", [None, None])[1],
+        "start_lat": start_lat,
+        "start_lng": start_lng,
+        "end_lat": end_lat,
+        "end_lng": end_lng,
 
         "is_private": raw.get("private"),
         "is_commute": raw.get("commute"),
         "is_manual": raw.get("manual"),
     }
+
