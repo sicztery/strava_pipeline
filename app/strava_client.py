@@ -115,10 +115,7 @@ def main():
                 "No new activities returned by API – nothing to process"
             )
             return
-
-            #TESTOWO#
-            logger.error("🔥 TEST: forcing GCS write")
-            write_single_activity_to_gcs(activities[0])
+     
 
 
         # ======================
@@ -150,8 +147,8 @@ def main():
             return
 
         
-            write_single_activity_to_gcs(activities[0])
-            logger.info("Zapis do GCS zakończony powodzeniem")
+        write_single_activity_to_gcs(activities[0])
+        logger.info("Zapis do GCS zakończony powodzeniem")
         
 
         # ======================
@@ -259,6 +256,7 @@ def write_single_activity_to_gcs(activity: dict):
 
 if __name__ == "__main__":
     main()
+
 
 
 
