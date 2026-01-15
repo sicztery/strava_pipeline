@@ -12,6 +12,9 @@ from app.ingest.filter import (
     extract_new_state
 )
 from app.ingest.raw_writer import write_raw
+from app.staging.transformer import transform_activity
+from app.staging.writer import write_staging
+
 
 
 # ======================
@@ -146,8 +149,6 @@ def main():
             )
             return
 
-        
-        write_single_activity_to_gcs(activities[0])
         logger.info("Zapis do GCS zakończony powodzeniem")
         
 
@@ -219,6 +220,29 @@ def main():
             "OK",
             "Pipeline run finished successfully"
         )
+        # ======================
+        # 8️⃣ STAGING (DERIVED)
+        # ======================
+        log_event(
+            run_id,
+            "STAGING",
+            "START",
+            "Writing STAGING records"
+        )
+
+        staging_activities = [
+            transform_activity(a) for a in new_activities_sorted
+        ]
+
+        write_staging(staging_activities)
+
+        log_event(
+            run_id,
+            "STAGING",
+            "OK",
+            "STAGING write completed",
+            {"records": len(staging_activities)}
+        )
 
     except Exception as e:
         log_event(
@@ -253,13 +277,3 @@ def write_single_activity_to_gcs(activity: dict):
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
