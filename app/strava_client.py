@@ -144,12 +144,12 @@ def main():
             )
             return
 
-    try:
-        write_single_activity_to_gcs(activities[0])
-        logger.info("Pipeline zakończony poprawnie")
-    except Exception:
-        logger.exception("Błąd zapisu do GCS – przerywam pipeline")
-        raise
+        try:
+            write_single_activity_to_gcs(activities[0])
+            logger.info("Pipeline zakończony poprawnie")
+        except Exception:
+            logger.exception("Błąd zapisu do GCS – przerywam pipeline")
+            raise
 
         # ======================
         # 5️⃣ SORT
@@ -252,6 +252,7 @@ logger.info(f"✅ zapisano aktywność do gs://{bucket_name}/{blob_path}")
 
 if __name__ == "__main__":
     main()
+
 
 
 
