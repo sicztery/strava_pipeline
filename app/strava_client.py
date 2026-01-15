@@ -1,6 +1,8 @@
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from google.cloud import storage
 
 from app.auth.auth_client import get_access_token
 from app.state.state_manager import load_state, save_state
@@ -221,8 +223,28 @@ def main():
         )
         raise
 
+def write_single_activity_to_gcs(activity: dict):
+    bucket_name = "TU_WPISZ_NAZWE_BUCKETA"
+    
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+
+    # prosty, czytelny path RAW
+    today = datetime.utcnow().strftime("%Y/%m/%d")
+    blob_path = f"raw/strava/{today}/activities.jsonl"
+
+    blob = bucket.blob(blob_path)
+
+    # zapis append-only (jsonl)
+    blob.upload_from_string(
+        json.dumps(activity) + "\n",
+        content_type="application/json"
+    )
+
+
 
 if __name__ == "__main__":
     main()
+
 
 
