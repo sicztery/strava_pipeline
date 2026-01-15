@@ -254,26 +254,24 @@ def main():
         )
         raise
 
-def write_single_activity_to_gcs(activity: dict):
-    bucket_name = "strava-raw-alpine-proton-482413"
-    
+def write_raw(activities: list[dict], run_id: str):
     client = storage.Client()
-    bucket = client.bucket(bucket_name)
+    bucket = client.bucket(BUCKET_NAME)
 
-    # prosty, czytelny path RAW
     today = datetime.utcnow().strftime("%Y/%m/%d")
-    blob_path = f"raw/strava/{today}/activities.jsonl"
+    blob_path = f"raw/strava/{today}/activities_{run_id}.jsonl"
 
     blob = bucket.blob(blob_path)
-    
 
+    payload = "\n".join(json.dumps(a) for a in activities) + "\n"
 
-    # zapis append-only (jsonl)
     blob.upload_from_string(
-        json.dumps(activity) + "\n",
+        payload,
         content_type="application/json"
     )
+
    
 
 if __name__ == "__main__":
     main()
+
