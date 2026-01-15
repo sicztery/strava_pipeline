@@ -231,7 +231,6 @@ def main():
         raise
 
 def write_single_activity_to_gcs(activity: dict):
-    logger.error("🔥 ENTER write_single_activity_to_gcs")
     bucket_name = "strava-raw-alpine-proton-482413"
     
     client = storage.Client()
@@ -242,9 +241,7 @@ def write_single_activity_to_gcs(activity: dict):
     blob_path = f"raw/strava/{today}/activities.jsonl"
 
     blob = bucket.blob(blob_path)
-    logger.error(
-    f"🔥 GCS UPLOAD bucket={bucket_name} path={blob_path}"
-    )
+    
 
 
     # zapis append-only (jsonl)
@@ -252,10 +249,11 @@ def write_single_activity_to_gcs(activity: dict):
         json.dumps(activity) + "\n",
         content_type="application/json"
     )
-    logger.info(f"✅ zapisano aktywność do gs://{bucket_name}/{blob_path}")
+   
 
 if __name__ == "__main__":
     main()
+
 
 
 
