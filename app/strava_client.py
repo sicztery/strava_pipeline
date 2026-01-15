@@ -116,6 +116,11 @@ def main():
             )
             return
 
+            #TESTOWO#
+            logger.error("🔥 TEST: forcing GCS write")
+            write_single_activity_to_gcs(activities[0])
+
+
         # ======================
         # 4️⃣ FILTER NEW
         # ======================
@@ -254,6 +259,7 @@ def write_single_activity_to_gcs(activity: dict):
 
 if __name__ == "__main__":
     main()
+
 
 
 
