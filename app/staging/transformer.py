@@ -1,5 +1,3 @@
-# app/staging/transformer.py
-
 def transform_activity(raw: dict) -> dict:
     return {
         "activity_id": raw["id"],
