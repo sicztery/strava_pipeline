@@ -15,8 +15,8 @@ def _to_timestamp(start_date: str) -> int:
 
 def filter_new_activities(
     activities: List[Dict],
-    last_seen_timestamp: int,
-    last_seen_activity_id: int
+    last_seen_timestamp: int | None,
+    last_seen_activity_id: int | None
 ) -> List[Dict]:
     """
     Zwraca TYLKO nowe aktywności zgodnie z kontraktem ingestu.
@@ -24,6 +24,10 @@ def filter_new_activities(
     Nie zapisuje.
     Nie sortuje wyników końcowych (robi to orchestrator).
     """
+
+    # 🆕 pierwszy run / brak state → wszystko nowe
+    if last_seen_timestamp is None or last_seen_activity_id is None:
+        return activities
 
     new_activities = []
 
@@ -65,3 +69,4 @@ def extract_new_state(activities: List[Dict]) -> Tuple[int, int]:
     activity_id = int(last["id"])
 
     return timestamp, activity_id
+
