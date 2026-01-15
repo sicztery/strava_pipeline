@@ -19,7 +19,7 @@ from app.ingest.raw_writer import write_raw
 # ======================
 logging.basicConfig(
     level=logging.INFO,
-    format="%(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger("strava_pipeline")
 
@@ -57,7 +57,7 @@ def main():
         status="OK",
         message="Pipeline run started"
     )
-
+        
     try:
         # ======================
         # 1️⃣ AUTH
@@ -144,6 +144,13 @@ def main():
             )
             return
 
+    try:
+        write_single_activity_to_gcs(activities[0])
+        logger.info("Pipeline zakończony poprawnie")
+    except Exception:
+        logger.exception("Błąd zapisu do GCS – przerywam pipeline")
+        raise
+
         # ======================
         # 5️⃣ SORT
         # ======================
@@ -224,7 +231,7 @@ def main():
         raise
 
 def write_single_activity_to_gcs(activity: dict):
-    bucket_name = "TU_WPISZ_NAZWE_BUCKETA"
+    bucket_name = "strava-raw-alpine-proton-482413"
     
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -241,10 +248,11 @@ def write_single_activity_to_gcs(activity: dict):
         content_type="application/json"
     )
 
-
+logger.info(f"✅ zapisano aktywność do gs://{bucket_name}/{blob_path}")
 
 if __name__ == "__main__":
     main()
+
 
 
 
