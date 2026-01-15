@@ -1,62 +1,34 @@
 import json
-import os
-from typing import Tuple
+from google.cloud import storage
 
-STATE_FILE = os.path.join(
-    os.path.dirname(__file__),
-    "state.json"
-)
+BUCKET_NAME = "strava-raw-alpine-proton-482413"
+STATE_BLOB = "state/strava_state.json"
 
 
-# ======================
-# LOAD
-# ======================
+def load_state():
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
+    blob = bucket.blob(STATE_BLOB)
 
-def load_state() -> Tuple[int, int]:
-    """
-    Zwraca:
-        (last_seen_timestamp, last_seen_activity_id)
-    """
+    if not blob.exists():
+        return None, None
 
-    if not os.path.exists(STATE_FILE):
-        raise RuntimeError("Brak state.json – stan ingestu nie istnieje")
+    data = json.loads(blob.download_as_text())
+    return data["last_seen_timestamp"], data["last_seen_activity_id"]
 
-    with open(STATE_FILE, "r") as f:
-        data = json.load(f)
 
-    if "last_seen_timestamp" not in data:
-        raise RuntimeError("state.json nie zawiera last_seen_timestamp")
+def save_state(last_seen_timestamp, last_seen_activity_id):
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
+    blob = bucket.blob(STATE_BLOB)
 
-    if "last_seen_activity_id" not in data:
-        raise RuntimeError("state.json nie zawiera last_seen_activity_id")
+    payload = {
+        "last_seen_timestamp": last_seen_timestamp,
+        "last_seen_activity_id": last_seen_activity_id,
+    }
 
-    return (
-        int(data["last_seen_timestamp"]),
-        int(data["last_seen_activity_id"]),
+    blob.upload_from_string(
+        json.dumps(payload),
+        content_type="application/json"
     )
 
-
-# ======================
-# SAVE
-# ======================
-
-def save_state(timestamp: int, activity_id: int) -> None:
-    """
-    Zapisuje nowy punkt ingestu.
-    """
-
-    if not isinstance(timestamp, int):
-        raise ValueError("timestamp musi być int")
-
-    if not isinstance(activity_id, int):
-        raise ValueError("activity_id musi być int")
-
-    with open(STATE_FILE, "w") as f:
-        json.dump(
-            {
-                "last_seen_timestamp": timestamp,
-                "last_seen_activity_id": activity_id,
-            },
-            f,
-            indent=2
-        )
