@@ -201,14 +201,31 @@ def main():
             "Writing STAGING records"
         )
 
-        staging_activities = [
-            s for s in (
-                transform_activity(a)
-                for a in new_activities_sorted
-            )
-            if s is not None
-        ]
 
+        staging_activities = []
+
+        for idx, a in enumerate(new_activities_sorted):
+            log_event(
+            run_id,
+            "STAGING",
+            "DEBUG",
+            f"Transform START idx={idx} activity_id={a.get('id')}"
+        )
+
+        s = transform_activity(a)
+
+        log_event(
+            run_id,
+            "STAGING",
+            "DEBUG",
+            f"Transform END idx={idx} activity_id={a.get('id')}"
+        )
+
+        if s is not None:
+        staging_activities.append(s)
+
+
+        
         if not staging_activities:
             log_event(
                 run_id,
@@ -274,6 +291,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
