@@ -1,35 +1,60 @@
 import json
-import os
 from datetime import datetime, timezone
 from typing import List, Dict
 
-RAW_FILE = os.path.join(
-    os.path.dirname(__file__),
-    "..",
-    "strava_raw.jsonl"
-)
+from google.cloud import storage
+
+# ======================
+# KONFIGURACJA
+# ======================
+
+BUCKET_NAME = "strava-raw-alpine-proton-482413"
 
 
-def write_raw(activities: List[Dict]) -> None:
+# ======================
+# API MODUŁU
+# ======================
+
+def write_raw(
+    activities: List[Dict],
+    run_id: str,
+) -> None:
     """
-    Append-only zapis RAW danych Stravy.
+    TRUE APPEND zapis RAW danych Stravy do GCS.
 
-    Zakładamy:
-    - activities to TYLKO nowe aktywności
-    - każda aktywność to dict z API
+    - jeden plik = jeden run
+    - append semantyczny (nigdy nie nadpisujemy)
+    - envelope zachowany (jak w wersji lokalnej)
     """
 
     if not activities:
         return
 
-    os.makedirs(os.path.dirname(RAW_FILE), exist_ok=True)
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
 
-    with open(RAW_FILE, "a", encoding="utf-8") as f:
-        for activity in activities:
-            row = {
-                "activity_id": int(activity["id"]),
-                "start_date": activity["start_date"],
-                "ingested_at": datetime.now(timezone.utc).isoformat(),
-                "raw_json": activity,
-            }
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    today = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+    blob_path = f"raw/strava/{today}/activities_{run_id}.jsonl"
+
+    blob = bucket.blob(blob_path)
+
+    lines = []
+    ingested_at = datetime.now(timezone.utc).isoformat()
+
+    for activity in activities:
+        row = {
+            "activity_id": int(activity["id"]),
+            "start_date": activity["start_date"],
+            "ingested_at": ingested_at,
+            "raw_json": activity,
+        }
+        lines.append(json.dumps(row, ensure_ascii=False))
+
+    payload = "\n".join(lines) + "\n"
+
+    blob.upload_from_string(
+        payload,
+        content_type="application/json"
+    )
+
+
