@@ -1,9 +1,13 @@
 import json
 import os
 import requests
-from pathlib import Path
+import logging
+from google.cloud import secretmanager
+from google.api_core.exceptions import NotFound
 
 from app.secrets import get_secret
+
+logger = logging.getLogger("strava_pipeline")
 
 # ======================
 # KONFIGURACJA
@@ -18,32 +22,51 @@ CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
 
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 
-AUTH_STATE_FILE = Path(__file__).parent / "auth_state.json"
+# 🔑 PARAMETER MANAGER (REGIONAL)
+AUTH_STATE_PARAMETER = (
+    "projects/alpine-proton-482413-u0/"
+    "locations/europe-west1/"
+    "parameters/auth_state"
+)
 
 # ======================
-# POMOCNICZE
+# PARAMETER MANAGER IO
 # ======================
 
-def _load_refresh_token() -> str:
-    if not AUTH_STATE_FILE.exists():
-        raise RuntimeError("Brak auth_state.json z refresh tokenem")
+def _load_refresh_token() -> str | None:
+    client = secretmanager.SecretManagerServiceClient()
 
-    with open(AUTH_STATE_FILE, "r") as f:
-        data = json.load(f)
+    try:
+        response = client.access_secret_version(
+            request={
+                "name": f"{AUTH_STATE_PARAMETER}/versions/latest"
+            }
+        )
+    except NotFound:
+        logger.info("AUTH_STATE: parameter not found (first run)")
+        return None
 
-    if "refresh_token" not in data:
-        raise RuntimeError("auth_state.json nie zawiera refresh_token")
+    payload = response.payload.data.decode("utf-8")
+    data = json.loads(payload)
 
-    return data["refresh_token"]
+    return data.get("refresh_token")
 
 
 def _save_refresh_token(refresh_token: str) -> None:
-    with open(AUTH_STATE_FILE, "w") as f:
-        json.dump(
-            {"refresh_token": refresh_token},
-            f,
-            indent=2
-        )
+    client = secretmanager.SecretManagerServiceClient()
+
+    payload = json.dumps(
+        {"refresh_token": refresh_token}
+    ).encode("utf-8")
+
+    client.add_secret_version(
+        request={
+            "parent": AUTH_STATE_PARAMETER,
+            "payload": {"data": payload},
+        }
+    )
+
+    logger.info("AUTH_STATE: new parameter version created")
 
 # ======================
 # API MODUŁU (KONTRAKT)
@@ -52,10 +75,17 @@ def _save_refresh_token(refresh_token: str) -> None:
 def get_access_token() -> str:
     """
     Zwraca zawsze aktualny access token.
-    Refresh token jest automatycznie rotowany i zapisywany lokalnie.
+    Refresh token jest automatycznie rotowany
+    i zapisywany jako NOWA WERSJA parametru.
     """
 
     refresh_token = _load_refresh_token()
+
+    if not refresh_token:
+        raise RuntimeError(
+            "Brak refresh_token w Parameter Manager – "
+            "wymagany jednorazowy OAuth bootstrap"
+        )
 
     response = requests.post(
         STRAVA_TOKEN_URL,
@@ -71,7 +101,7 @@ def get_access_token() -> str:
     response.raise_for_status()
     data = response.json()
 
-    # 🔁 OAuth Stravy ZAWSZE zwraca nowy refresh token
+    # 🔁 Strava ZAWSZE rotuje refresh_token
     if "refresh_token" in data:
         _save_refresh_token(data["refresh_token"])
 
@@ -79,5 +109,3 @@ def get_access_token() -> str:
         raise RuntimeError("Brak access_token w odpowiedzi Stravy")
 
     return data["access_token"]
-
-
