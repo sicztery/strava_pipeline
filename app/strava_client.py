@@ -149,9 +149,7 @@ def main():
             )
             return
 
-        logger.info("Zapis do GCS zakończony powodzeniem")
         
-
         # ======================
         # 5️⃣ SORT
         # ======================
@@ -192,8 +190,46 @@ def main():
             "RAW write completed"
         )
 
+        
         # ======================
-        # 7️⃣ UPDATE STATE
+        # 7️⃣ STAGING (DERIVED)
+        # ======================
+        log_event(
+            run_id,
+            "STAGING",
+            "START",
+            "Writing STAGING records"
+        )
+
+        staging_activities = [
+            s for s in (
+                transform_activity(a)
+                for a in new_activities_sorted
+            )
+            if s is not None
+        ]
+
+        if not staging_activities:
+            log_event(
+                run_id,
+                "STAGING",
+                "SKIP",
+                "No staging records after transform"
+            )
+        else:
+            write_staging(staging_activities, run_id)
+
+            log_event(
+                run_id,
+                "STAGING",
+                "OK",
+                "STAGING write completed",
+               {"records": len(staging_activities)}
+            )
+
+        
+        # ======================
+        # 8️⃣ UPDATE STATE
         # ======================
         log_event(run_id, "STATE_UPDATE", "START", "Updating state")
 
@@ -212,37 +248,19 @@ def main():
                 "new_timestamp": new_timestamp,
                 "new_activity_id": new_activity_id
             }
-        )
+        ) 
 
+        
+        # ======================
+        # 9️⃣ PIPELINE END
+        # ======================
         log_event(
             run_id,
             "PIPELINE_END",
             "OK",
             "Pipeline run finished successfully"
         )
-        # ======================
-        # 8️⃣ STAGING (DERIVED)
-        # ======================
-        log_event(
-            run_id,
-            "STAGING",
-            "START",
-            "Writing STAGING records"
-        )
-
-        staging_activities = [
-            transform_activity(a) for a in new_activities_sorted
-        ]
-
-        write_staging(staging_activities, run_id)
-
-        log_event(
-            run_id,
-            "STAGING",
-            "OK",
-            "STAGING write completed",
-            {"records": len(staging_activities)}
-        )
+        
 
     except Exception as e:
         log_event(
@@ -256,6 +274,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
