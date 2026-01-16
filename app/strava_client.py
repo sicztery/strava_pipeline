@@ -183,7 +183,7 @@ def main():
             {"records": len(new_activities_sorted)}
         )
 
-        write_raw(new_activities_sorted)
+        write_raw(new_activities_sorted, run_id)
 
         log_event(
             run_id,
@@ -274,4 +274,5 @@ def write_raw(activities: list[dict], run_id: str):
 
 if __name__ == "__main__":
     main()
+
 
