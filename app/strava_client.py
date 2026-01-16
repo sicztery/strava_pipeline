@@ -206,23 +206,23 @@ def main():
 
         for idx, a in enumerate(new_activities_sorted):
             log_event(
-            run_id,
-            "STAGING",
-            "DEBUG",
-            f"Transform START idx={idx} activity_id={a.get('id')}"
-        )
+                run_id,
+                "STAGING",
+                "DEBUG",
+                f"Transform START idx={idx} activity_id={a.get('id')}"
+            )
 
-        s = transform_activity(a)
+            s = transform_activity(a)
 
-        log_event(
-            run_id,
-            "STAGING",
-            "DEBUG",
-            f"Transform END idx={idx} activity_id={a.get('id')}"
-        )
+            log_event(
+                run_id,
+                "STAGING",
+                "DEBUG",
+                f"Transform END idx={idx} activity_id={a.get('id')}"
+            )
 
-        if s is not None:
-        staging_activities.append(s)
+            if s is not None:
+                staging_activities.append(s)
 
 
         
@@ -291,6 +291,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
