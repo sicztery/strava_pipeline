@@ -234,7 +234,7 @@ def main():
             transform_activity(a) for a in new_activities_sorted
         ]
 
-        write_staging(staging_activities)
+        write_staging(staging_activities, run_id)
 
         log_event(
             run_id,
@@ -256,6 +256,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
