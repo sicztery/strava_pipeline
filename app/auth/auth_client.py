@@ -2,8 +2,11 @@ import json
 import os
 import requests
 import logging
-from google.cloud.parameter_manager_v1 import ParameterManagerClient
+from google.cloud.secretmanager_v1.services.parameter_manager_service import (
+    ParameterManagerServiceClient,
+)
 from google.api_core.exceptions import NotFound
+
 
 from app.secrets import get_secret
 
@@ -33,7 +36,7 @@ AUTH_PARAMETER = (
 # ======================
 
 def _load_refresh_token() -> str | None:
-    client = ParameterManagerClient()
+    client = ParameterManagerServiceClient()
 
     try:
         response = client.access_parameter_version(
@@ -50,7 +53,7 @@ def _load_refresh_token() -> str | None:
 
 
 def _save_refresh_token(refresh_token: str) -> None:
-    client = ParameterManagerClient()
+    client = ParameterManagerServiceClient()
 
     payload = json.dumps(
         {"refresh_token": refresh_token}
@@ -100,3 +103,4 @@ def get_access_token() -> str:
         raise RuntimeError("Brak access_token w odpowiedzi Stravy")
 
     return data["access_token"]
+
