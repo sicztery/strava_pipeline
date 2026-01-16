@@ -252,27 +252,10 @@ def main():
             "Pipeline failed with exception",
             {"error": str(e)}
         )
-        raise
-
-def write_raw(activities: list[dict], run_id: str):
-    client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
-
-    today = datetime.utcnow().strftime("%Y/%m/%d")
-    blob_path = f"raw/strava/{today}/activities_{run_id}.jsonl"
-
-    blob = bucket.blob(blob_path)
-
-    payload = "\n".join(json.dumps(a) for a in activities) + "\n"
-
-    blob.upload_from_string(
-        payload,
-        content_type="application/json"
-    )
-
-   
+        raise   
 
 if __name__ == "__main__":
     main()
+
 
 
