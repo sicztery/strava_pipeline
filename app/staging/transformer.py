@@ -46,6 +46,7 @@ def transform_activity(raw: dict) -> dict:
         "suffer_score": raw.get("suffer_score"),
 
         "device_name": raw.get("device_name"),
+        "gear_id": raw.get("gear_id"),
 
         "start_lat": start_lat,
         "start_lng": start_lng,
