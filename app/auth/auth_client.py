@@ -1,6 +1,7 @@
 import os
 import requests
 import logging
+import json
 
 from app.secrets import get_secret, update_refresh_token_if_changed
 
@@ -42,5 +43,6 @@ def get_access_token() -> str:
         raise RuntimeError("Brak access_token w odpowiedzi Stravy")
 
     return data["access_token"]
+
 
 
