@@ -11,7 +11,7 @@ if not PROJECT_ID:
 
 
 def get_access_token() -> str:
-    refresh_state = get_secret("strava-refresh-token", PROJECT_ID)
+    refresh_state = get_secret("strava-auth-state", PROJECT_ID)
     refresh_token = json.loads(refresh_state)["refresh_token"]
 
     response = requests.post(
@@ -30,7 +30,7 @@ def get_access_token() -> str:
 
     if "refresh_token" in data:
         updated = update_refresh_token_if_changed(
-            secret_name="strava-refresh-token",
+            secret_name="strava-auth-state",
             project_id=PROJECT_ID,
             new_refresh_token=data["refresh_token"]
         )
@@ -42,4 +42,5 @@ def get_access_token() -> str:
         raise RuntimeError("Brak access_token w odpowiedzi Stravy")
 
     return data["access_token"]
+
 
