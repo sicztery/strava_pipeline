@@ -1,87 +1,28 @@
-import json
 import os
 import requests
 import logging
-from google.cloud import secretmanager
-from google.api_core.exceptions import NotFound
 
-from app.secrets import get_secret
+from app.secrets import get_json_secret, update_json_secret_if_changed
 
 logger = logging.getLogger("strava_pipeline")
-
-# ======================
-# KONFIGURACJA
-# ======================
 
 PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
 if not PROJECT_ID:
     raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
 
-CLIENT_ID = get_secret("strava-client-id", PROJECT_ID)
-CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
+CLIENT_ID = get_json_secret("strava-client-id", PROJECT_ID)["client_id"]
+CLIENT_SECRET = get_json_secret("strava-client-secret", PROJECT_ID)["client_secret"]
 
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
+AUTH_STATE_SECRET = "strava-auth-state"
 
-# 🔑 AUTH STATE (SECRET MANAGER)
-AUTH_STATE_SECRET = f"projects/{PROJECT_ID}/secrets/strava-auth-state"
-
-# ======================
-# SECRET MANAGER IO
-# ======================
-
-def _load_refresh_token() -> str | None:
-    client = secretmanager.SecretManagerServiceClient()
-
-    try:
-        response = client.access_secret_version(
-            request={
-                "name": f"{AUTH_STATE_SECRET}/versions/latest"
-            }
-        )
-    except NotFound:
-        logger.info("AUTH_STATE: secret not found (bootstrap required)")
-        return None
-
-    payload = response.payload.data.decode("utf-8")
-    data = json.loads(payload)
-
-    return data.get("refresh_token")
-
-
-def _save_refresh_token(refresh_token: str) -> None:
-    client = secretmanager.SecretManagerServiceClient()
-
-    payload = json.dumps(
-        {"refresh_token": refresh_token}
-    ).encode("utf-8")
-
-    client.add_secret_version(
-        request={
-            "parent": AUTH_STATE_SECRET,
-            "payload": {"data": payload},
-        }
-    )
-
-    logger.info("AUTH_STATE: new secret version created")
-
-# ======================
-# API MODUŁU (KONTRAKT)
-# ======================
 
 def get_access_token() -> str:
-    """
-    Zwraca zawsze aktualny access token.
-    Refresh token jest automatycznie rotowany
-    i zapisywany jako NOWA WERSJA secreta.
-    """
-
-    refresh_token = _load_refresh_token()
+    auth_state = get_json_secret(AUTH_STATE_SECRET, PROJECT_ID)
+    refresh_token = auth_state.get("refresh_token")
 
     if not refresh_token:
-        raise RuntimeError(
-            "Brak refresh_token w Secret Manager – "
-            "wymagany jednorazowy OAuth bootstrap"
-        )
+        raise RuntimeError("Brak refresh_token w auth_state – wymagany bootstrap OAuth")
 
     response = requests.post(
         STRAVA_TOKEN_URL,
@@ -97,9 +38,15 @@ def get_access_token() -> str:
     response.raise_for_status()
     data = response.json()
 
-    # 🔁 Strava ZAWSZE rotuje refresh_token
     if "refresh_token" in data:
-        _save_refresh_token(data["refresh_token"])
+        updated = update_json_secret_if_changed(
+            secret_name=AUTH_STATE_SECRET,
+            project_id=PROJECT_ID,
+            new_payload={"refresh_token": data["refresh_token"]}
+        )
+
+        if updated:
+            logger.info("AUTH_STATE: refresh token rotated and saved")
 
     if "access_token" not in data:
         raise RuntimeError("Brak access_token w odpowiedzi Stravy")
