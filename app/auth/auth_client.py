@@ -5,11 +5,15 @@ import json
 
 from app.secrets import get_secret, update_refresh_token_if_changed
 
-STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 
 PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
 if not PROJECT_ID:
     raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
+
+CLIENT_ID = get_secret("strava-client-id", PROJECT_ID)
+CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
+
+STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 
 
 def get_access_token() -> str:
@@ -44,6 +48,7 @@ def get_access_token() -> str:
         raise RuntimeError("Brak access_token w odpowiedzi Stravy")
 
     return data["access_token"]
+
 
 
 
