@@ -39,7 +39,7 @@ def write_raw(
     blob = bucket.blob(blob_path)
 
     lines = []
-    ingested_at = datetime.now(timezone.utc).isoformat()
+    ingested_at = datetime.now(timezone.utc).strftime("%Y/%m/%d")
 
     for activity in activities:
         row = {
@@ -56,5 +56,6 @@ def write_raw(
         payload,
         content_type="application/json"
     )
+
 
 
