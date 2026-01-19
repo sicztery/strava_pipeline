@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 def _safe_latlng(value):
     if (
         isinstance(value, list)
@@ -59,6 +57,6 @@ def transform_activity(raw: dict) -> dict:
         "is_commute": raw.get("commute"),
         "is_manual": raw.get("manual"),
 
-        "ingest_ts": datetime.now(timezone.utc)
+        "ingest_ts": raw.get("ingested_at")
     }
 
