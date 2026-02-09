@@ -15,6 +15,8 @@ CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
 
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 
+logger = logging.getLogger("strava_pipeline")
+
 
 def get_access_token() -> str:
     refresh_state = get_secret("strava-auth-state", PROJECT_ID)
