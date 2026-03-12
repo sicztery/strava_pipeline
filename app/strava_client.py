@@ -51,7 +51,7 @@ def log_event(
 
 
 
-def main():
+def run_pipeline():
     run_id = str(uuid.uuid4())[:8]
 
     log_event(
@@ -273,7 +273,7 @@ def main():
         raise   
 
 if __name__ == "__main__":
-    main()
+    run_pipeline()
 
 
 

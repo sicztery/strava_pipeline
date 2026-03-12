@@ -3,7 +3,7 @@ import requests
 import logging
 import json
 
-from app.secrets import get_secret, update_refresh_token_if_changed
+from app.gcp_secrets import get_secret, update_refresh_token_if_changed
 
 
 PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")

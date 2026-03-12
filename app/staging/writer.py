@@ -1,11 +1,15 @@
 import json
+import os
 from datetime import datetime
 from google.cloud import storage
 import logging
 
 logger = logging.getLogger("strava_pipeline")
 
-BUCKET_NAME = "strava-raw-alpine-proton-482413"
+BUCKET_NAME = os.getenv("BUCKET_NAME")
+if not BUCKET_NAME:
+    raise RuntimeError("Missing env var: BUCKET_NAME")
+
 
 
 def write_staging(activities: list[dict], run_id: str):
