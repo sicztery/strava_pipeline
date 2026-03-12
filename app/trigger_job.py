@@ -1,7 +1,7 @@
 import os
 import logging
 from flask import Flask, request
-from google.cloud import run_v2, JobsClient, RunJobRequest
+from google.cloud import run_v2
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("strava_pipeline")
@@ -18,15 +18,11 @@ def trigger():
 
     logger.info("PubSub message received")
 
-    client = JobsClient()
-
-    request = RunJobRequest(
-        name=job_path
-    )
+    client = run_v2.JobsClient()
 
     job_path = f"projects/{PROJECT_ID}/locations/{REGION}/jobs/{JOB_NAME}"
 
-    client.run_job(request=request)
+    client.run_job(name=job_path)
 
     logger.info("Worker job started")
 
