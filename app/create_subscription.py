@@ -1,8 +1,8 @@
 import os
-import requests
 import logging
+import requests
 from dotenv import load_dotenv
-from app.gcp_secrets import get_secret
+from gcp_secrets import get_secret
 
 load_dotenv()
 
@@ -17,19 +17,51 @@ PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
 if not PROJECT_ID:
     raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
 
-
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
 CALLBACK_URL = os.getenv("WEBHOOK_CALLBACK_URL")
 CLIENT_ID = get_secret("strava-client-id", PROJECT_ID)
 CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
 
-CLIENT_ID = os.getenv("STRAVA_CLIENT_ID")
-CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET")
+BASE_URL = "https://www.strava.com/api/v3/push_subscriptions"
+
+
+def list_subscriptions():
+    r = requests.get(
+        BASE_URL,
+        params={
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        }
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def delete_subscription(sub_id):
+    logger.info(f"Deleting existing subscription: {sub_id}")
+
+    r = requests.delete(
+        f"{BASE_URL}/{sub_id}",
+        params={
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        }
+    )
+
+    r.raise_for_status()
 
 
 def create_subscription():
 
-    url = "https://www.strava.com/api/v3/push_subscriptions"
+    logger.info("Checking existing subscriptions")
+
+    subs = list_subscriptions()
+
+    if subs:
+        for sub in subs:
+            delete_subscription(sub["id"])
+
+    logger.info("Creating new Strava webhook subscription")
 
     payload = {
         "client_id": CLIENT_ID,
@@ -38,17 +70,11 @@ def create_subscription():
         "verify_token": VERIFY_TOKEN,
     }
 
-    logger.info("Creating Strava webhook subscription")
+    r = requests.post(BASE_URL, data=payload)
 
-    response = requests.post(url, data=payload)
+    logger.info(f"Status: {r.status_code}")
+    logger.info(f"Response: {r.text}")
 
-    logger.info(f"Status: {response.status_code}")
-    logger.info(f"Response: {response.text}")
+    r.raise_for_status()
 
-    response.raise_for_status()
-
-    logger.info("Subscription created successfully")
-
-
-if __name__ == "__main__":
-    create_subscription()
+    logger.info("Webhook subscription created successfully")

@@ -35,7 +35,7 @@ app = Flask(__name__)
 # ======================
 
 @app.route("/webhook", methods=["GET"])
-def verify():
+def handle_verification():
 
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
@@ -55,7 +55,7 @@ def verify():
 # ======================
 
 @app.route("/webhook", methods=["POST"])
-def webhook():
+def handle_event():
 
     event = request.json
 
