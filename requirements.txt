@@ -1,6 +1,7 @@
 requests>=2.31.0
+flask
+python-dotenv
 google-cloud-secret-manager
 google-cloud-storage
 google-cloud-pubsub
-flask
-python-dotenv
+google-cloud-run
