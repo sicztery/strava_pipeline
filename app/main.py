@@ -3,6 +3,7 @@ import sys
 from app.webhook import run_webhook
 from app.create_subscription import create_subscription
 from app.strava_client import run_pipeline
+from app.trigger_job import run_trigger
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +23,9 @@ def main():
 
     elif mode == "create_sub":
         create_subscription()
+
+    elif mode == "trigger":
+        run_trigger()    
 
     else:
         raise ValueError(f"Unknown mode: {mode}")
