@@ -18,7 +18,13 @@ if not PROJECT_ID:
     raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
 
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
+if not VERIFY_TOKEN:
+    raise RuntimeError("Missing env var: WEBHOOK_VERIFY_TOKEN")
+
 CALLBACK_URL = os.getenv("WEBHOOK_CALLBACK_URL")
+if not CALLBACK_URL:
+    raise RuntimeError("Missing env var: WEBHOOK_CALLBACK_URL")
+
 CLIENT_ID = get_secret("strava-client-id", PROJECT_ID)
 CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
 
@@ -59,7 +65,7 @@ def create_subscription():
 
     if subs:
         for sub in subs:
-            delete_subscription(sub["id"])
+            delete_subscription(sub.get("id"))
 
     logger.info("Creating new Strava webhook subscription")
 
@@ -70,10 +76,10 @@ def create_subscription():
         "verify_token": VERIFY_TOKEN,
     }
 
-    r = requests.post(BASE_URL, data=payload)
+    r = requests.post(BASE_URL, data=payload, timeout=30)
 
     logger.info(f"Status: {r.status_code}")
-    logger.info(f"Response: {r.text}")
+    logger.info(f"Response JSON: {r.json()}")
 
     r.raise_for_status()
 
