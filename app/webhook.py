@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from app.pubsub import publish_event
 import os
 import logging
 
@@ -59,8 +60,14 @@ def handle_event():
 
     event = request.json
 
-    logger.info(f"Strava webhook event: {event}")
+    logger.info(
+        f"Strava event: type={event.get('aspect_type')} "
+        f"object={event.get('object_type')} "
+        f"id={event.get('object_id')}"
+    )
 
+    publish_event(event)
+    
     return "ok", 200
 
 
