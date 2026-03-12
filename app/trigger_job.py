@@ -15,6 +15,8 @@ app = Flask(__name__)
 
 @app.route("/", methods=["POST"])
 def trigger():
+    if not request.headers.get("Authorization"):
+        return "Unauthorized", 401
 
     logger.info("PubSub message received")
 

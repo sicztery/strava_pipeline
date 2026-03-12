@@ -57,6 +57,12 @@ def handle_verification():
 
 @app.route("/webhook", methods=["POST"])
 def handle_event():
+    if event.get("aspect_type") != "create":
+        logger.info("Ignoring non-create event")
+        return "ignored", 200
+    
+    if event["object_type"] != "activity":
+        return "ignored", 200
 
     event = request.json
 
@@ -67,7 +73,7 @@ def handle_event():
     )
 
     publish_event(event)
-    
+
     return "ok", 200
 
 
