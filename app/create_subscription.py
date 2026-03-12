@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 from dotenv import load_dotenv
-from gcp_secrets import get_secret
+from app.gcp_secrets import get_secret
 
 load_dotenv()
 

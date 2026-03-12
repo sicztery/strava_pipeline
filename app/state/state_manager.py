@@ -2,9 +2,9 @@ import os
 import json
 from google.cloud import storage
 
-BUCKET_NAME = os.getenv("STRAVA_RAW_BUCKET")
+BUCKET_NAME = os.getenv("BUCKET_NAME")
 if not BUCKET_NAME:
-    raise RuntimeError("Missing env var: STRAVA_RAW_BUCKET")
+    raise RuntimeError("Missing env var: BUCKET_NAME")
 STATE_BLOB = "state/strava_state.json"
 
 
