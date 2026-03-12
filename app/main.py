@@ -4,6 +4,7 @@ from app.webhook import run_webhook
 from app.create_subscription import create_subscription
 from app.strava_client import run_pipeline
 from app.trigger_job import run_trigger
+from app.bq_transform import run_transform
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +26,10 @@ def main():
         create_subscription()
 
     elif mode == "trigger":
-        run_trigger()    
+        run_trigger()   
+
+    elif mode == "bq_transform":
+        run_transform()     
 
     else:
         raise ValueError(f"Unknown mode: {mode}")

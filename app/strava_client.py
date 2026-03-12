@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from google.cloud import storage
@@ -14,6 +15,7 @@ from app.ingest.filter import (
 from app.ingest.raw_writer import write_raw
 from app.staging.transformer import transform_activity
 from app.staging.writer import write_staging
+from app.pubsub import publish_event
 
 
 
@@ -271,6 +273,15 @@ def run_pipeline():
             {"error": str(e)}
         )
         raise   
+
+publish_event(
+    {
+        "type": "pipeline_finished",
+        "source": "strava_pipeline",
+        "timestamp": time.time()
+    },
+    topic="strava-pipeline-finished"
+)    
 
 if __name__ == "__main__":
     run_pipeline()

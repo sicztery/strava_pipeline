@@ -12,7 +12,9 @@ publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
 
 
-def publish_event(event: dict):
+def publish_event(event: dict, topic: str):
+
+    topic_path = publisher.topic_path(PROJECT_ID, topic)
 
     message = json.dumps(event).encode("utf-8")
 
@@ -24,4 +26,4 @@ def publish_event(event: dict):
         f"id={event.get('object_id')}"
     )
 
-    return future.result()
+    return future
