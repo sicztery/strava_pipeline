@@ -19,6 +19,7 @@ app = Flask(__name__)
 
 PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
 DATASET = os.getenv("BQ_DATASET")
+BQ_LOCATION = os.getenv("BQ_LOCATION")
 
 QUERY_DELAY_SECONDS = 5
 
@@ -56,7 +57,10 @@ def run_query(sql_path: str):
 
     sql = load_sql(sql_path)
 
-    job = client.query(sql)
+    job = client.query(
+    sql,
+    location=BQ_LOCATION
+    )
 
     job.result()
 
