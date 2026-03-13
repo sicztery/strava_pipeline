@@ -11,6 +11,7 @@ import logging
 load_dotenv()
 
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
+TOPIC_ID = os.getenv("STRAVA_PUBSUB_TOPIC")
 
 # ======================
 # LOGGING
@@ -76,7 +77,7 @@ def handle_event():
         f"id={event.get('object_id')}"
     )
 
-    publish_event(event)
+    publish_event(event, TOPIC_ID)
 
     return "ok", 200
 

@@ -6,7 +6,7 @@ from google.cloud import pubsub_v1
 logger = logging.getLogger("strava_pipeline")
 
 PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
-TOPIC_ID = os.getenv("STRAVA_PUBSUB_TOPIC", "strava-events")
+TOPIC_ID = os.getenv("STRAVA_PUBSUB_TOPIC")
 
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
