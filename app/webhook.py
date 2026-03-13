@@ -57,14 +57,18 @@ def handle_verification():
 
 @app.route("/webhook", methods=["POST"])
 def handle_event():
+    event = request.json
+    if not event:
+        logger.warning("Empty event payload")
+        return "invalid", 400
+
     if event.get("aspect_type") != "create":
         logger.info("Ignoring non-create event")
         return "ignored", 200
     
-    if event["object_type"] != "activity":
+    if event.get("object_type") != "activity":
+        logger.info("Ignoring non-activity object")
         return "ignored", 200
-
-    event = request.json
 
     logger.info(
         f"Strava event: type={event.get('aspect_type')} "
