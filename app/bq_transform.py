@@ -24,6 +24,11 @@ COOLDOWN_SECONDS = 180
 QUERY_DELAY_SECONDS = 5
 last_run = 0
 
+# Tracks recently processed message IDs to handle duplicates
+# In production, consider using Redis or Datastore for distributed deployments
+processed_messages = {}
+MESSAGE_ID_RETENTION = 3600  # Keep message IDs for 1 hour
+
 SQL_QUERIES = [
     "sql/pipeline_raw_buffer.sql",
     "sql/pipeline_timestamp_buffer.sql",
@@ -46,6 +51,32 @@ def load_sql(path: str) -> str:
     sql = sql.replace("${DATASET}", DATASET)
 
     return sql
+
+
+# ======================
+# IDEMPOTENCY CHECK
+# ======================
+
+def _cleanup_old_messages():
+    """Remove message IDs older than retention period."""
+    now = time.time()
+    expired = [
+        msg_id for msg_id, timestamp in processed_messages.items()
+        if now - timestamp > MESSAGE_ID_RETENTION
+    ]
+    for msg_id in expired:
+        del processed_messages[msg_id]
+
+
+def is_message_duplicate(message_id: str) -> bool:
+    """Check if message was already processed."""
+    _cleanup_old_messages()
+    return message_id in processed_messages
+
+
+def mark_message_processed(message_id: str):
+    """Mark message as processed."""
+    processed_messages[message_id] = time.time()
 
 
 # ======================
@@ -96,19 +127,72 @@ def trigger():
 
     global last_run
 
-    now = time.time()
+    # ======================
+    # PARSE PUBSUB MESSAGE
+    # ======================
 
-    if now - last_run < COOLDOWN_SECONDS:
-        logger.info("Transform cooldown active - skipping")
-        return "skipped", 200
+    envelope = request.get_json()
+    
+    if not envelope:
+        logger.error("No JSON received from Pub/Sub")
+        return "Bad Request", 400
 
-    last_run = now
+    if "message" not in envelope:
+        logger.error("Invalid Pub/Sub message format - missing 'message' key")
+        return "Bad Request", 400
 
-    logger.info("Received pipeline_finished event")
+    message = envelope["message"]
+    message_id = message.get("messageId", "unknown")
 
-    run_queries()
+    logger.info(f"Received Pub/Sub message: {message_id}")
 
-    return "ok", 200
+    # ======================
+    # DUPLICATE CHECK
+    # ======================
+
+    if is_message_duplicate(message_id):
+        logger.info(f"Message {message_id} was already processed - skipping")
+        return "ok", 200
+
+    try:
+        # ======================
+        # COOLDOWN CHECK
+        # ======================
+
+        now = time.time()
+
+        if now - last_run < COOLDOWN_SECONDS:
+            logger.info(
+                f"Transform cooldown active - skipping message {message_id} "
+                f"({int(COOLDOWN_SECONDS - (now - last_run))}s remaining)"
+            )
+            # Mark as processed to avoid retry attempt even during cooldown
+            mark_message_processed(message_id)
+            # Return 200 to prevent Pub/Sub from retrying
+            return "ok", 200
+
+        last_run = now
+
+        # ======================
+        # EXECUTE TRANSFORM
+        # ======================
+
+        logger.info(f"Starting BigQuery transform for message {message_id}")
+        run_queries()
+        logger.info(f"Successfully completed transform for message {message_id}")
+
+        # Mark as successfully processed
+        mark_message_processed(message_id)
+
+        return "ok", 200
+
+    except Exception as e:
+        logger.error(
+            f"ERROR processing message {message_id}: {str(e)}", 
+            exc_info=True
+        )
+        # Return 500 to trigger Pub/Sub retry
+        return "Internal Server Error", 500
 
 
 # ======================
