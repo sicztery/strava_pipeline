@@ -1,29 +1,27 @@
 #####                                                          #####
-################# STRAVA JACEG ELT PIPELINE 1.1 ####################.,
+################# STRAVA JACEG ELT PIPELINE 2.0 ####################.,
 #####                                                          #####  ',
                                                                         ,
-1. Worker scheme:                                                        ,
+                                                                         ,
 
-strava_pipeline
+1. Worker scheme: 
  │
  ├── app/                                                                  ,
  │   │
  │   ├── auth/
- │   │   ├── auth_client.py        # OAuth 2.0: refresh, zapis tokena
- │   │   └── auth_state.json       # refresh token (stan AUTH)              , 
- │   │
+ │   │   └──auth_client.py         # OAuth 2.0 refresh, token exchange
+ │   │                                                                      , 
  │   ├── state/
- │   │   ├── state_manager.py      # load/save last_seen (timestamp + id)
- │   │   └── state.json            # stan ingestu
- │   │
+ │   │   └──state_manager.py       # load/save last_seen (timestamp + id 
+ │   │                               json handling in google cloud storage)
  │   ├── api/
- │   │   └── strava_api.py         # requesty HTTP do Stravy                 ,
+ │   │   └── strava_api.py         # Strava HTTP requests                    ,
  │   │
  │   ├── ingest/
- │   │   ├── filter.py             # logika "if there's new activity"
- │   │   └── raw_writer.py         # zapis RAW (append-only)
+ │   │   ├── filter.py             # if-there's-new-activity logic
+ │   │   └── raw_writer.py         # append-only RAW saving (data lake)
  │   │
- │   ├── secrets.py                # not what you think
+ │   ├── gcp_secrets.py            # secrets handler
  │   └── strava_client.py          # orchestrator (main)                     ,
  │
  ├── cloudbuild.yaml
@@ -31,7 +29,7 @@ strava_pipeline
  ├── README.md
  ├── requirements.txt
  ├── scheme.txt
- └── setup.py                                                     
+ └──                                                      
 
                                                                              ,
 

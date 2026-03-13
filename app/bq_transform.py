@@ -20,8 +20,9 @@ app = Flask(__name__)
 PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
 DATASET = os.getenv("BQ_DATASET")
 BQ_LOCATION = os.getenv("BQ_LOCATION")
-
+COOLDOWN_SECONDS = 180
 QUERY_DELAY_SECONDS = 5
+last_run = 0
 
 SQL_QUERIES = [
     "sql/pipeline_raw_buffer.sql",
@@ -92,6 +93,16 @@ def run_queries():
 
 @app.route("/", methods=["POST"])
 def trigger():
+
+    global last_run
+
+    now = time.time()
+
+    if now - last_run < COOLDOWN_SECONDS:
+        logger.info("Transform cooldown active - skipping")
+        return "skipped", 200
+
+    last_run = now
 
     logger.info("Received pipeline_finished event")
 

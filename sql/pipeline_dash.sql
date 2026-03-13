@@ -25,4 +25,6 @@ FROM `${PROJECT_ID}.${DATASET}.strava_main`
 WHERE start_date_local > '2021-01-01' AND
       start_date_local IS NOT NULL
 ORDER BY activity_id DESC
+
+-- analytical dashboard-friendly view 
       

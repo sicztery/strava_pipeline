@@ -11,7 +11,6 @@ if not BUCKET_NAME:
     raise RuntimeError("Missing env var: BUCKET_NAME")
 
 
-
 def write_staging(activities: list[dict], run_id: str):
     client = storage.Client()
     bucket = client.bucket(BUCKET_NAME)
