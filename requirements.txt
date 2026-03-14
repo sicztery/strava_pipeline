@@ -3,6 +3,5 @@ flask
 python-dotenv
 google-cloud-secret-manager
 google-cloud-storage
-google-cloud-pubsub
 google-cloud-run
 google-cloud-bigquery
