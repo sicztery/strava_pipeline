@@ -28,10 +28,14 @@ last_run = 0
 processed_messages = {}
 MESSAGE_ID_RETENTION = 3600  # Keep message IDs for 1 hour
 
+# Get absolute path to SQL files based on script location
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+
 SQL_QUERIES = [
-    "sql/pipeline_raw_buffer.sql",
-    "sql/pipeline_timestamp_buffer.sql",
-    "sql/pipeline_main.sql"
+    os.path.join(BASE_DIR, "sql/pipeline_raw_buffer.sql"),
+    os.path.join(BASE_DIR, "sql/pipeline_timestamp_buffer.sql"),
+    os.path.join(BASE_DIR, "sql/pipeline_main.sql")
 ]
 
 client = bigquery.Client(project=PROJECT_ID)
@@ -42,12 +46,18 @@ client = bigquery.Client(project=PROJECT_ID)
 # ======================
 
 def load_sql(path: str) -> str:
-
+    """Load SQL file and replace variables. Raises FileNotFoundError if file doesn't exist."""
+    
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"SQL file not found: {path}")
+    
     with open(path) as f:
         sql = f.read()
 
     sql = sql.replace("${PROJECT_ID}", PROJECT_ID)
     sql = sql.replace("${DATASET}", DATASET)
+    
+    logger.debug(f"Loaded SQL from {path} ({len(sql)} chars)")
 
     return sql
 
@@ -83,19 +93,32 @@ def mark_message_processed(message_id: str):
 # ======================
 
 def run_query(sql_path: str):
-
+    """Execute a BigQuery query with proper error handling and timeout."""
+    
     logger.info(f"Running query: {sql_path}")
-
-    sql = load_sql(sql_path)
-
-    job = client.query(
-    sql,
-    location=BQ_LOCATION
-    )
-
-    job.result()
-
-    logger.info(f"Finished query: {sql_path}")
+    
+    try:
+        sql = load_sql(sql_path)
+        
+        logger.info(f"SQL query loaded ({len(sql)} characters)")
+        logger.debug(f"SQL: {sql[:200]}...")  # Log first 200 chars for debugging
+        
+        job_config = bigquery.QueryJobConfig(use_legacy_sql=False)
+        job = client.query(sql, job_config=job_config, location=BQ_LOCATION)
+        
+        logger.info(f"Query job submitted: {job.job_id}")
+        
+        # Wait for query to complete with 5-minute timeout
+        result = job.result(timeout=300)
+        
+        logger.info(f"Finished query: {sql_path} (rows affected: {result.total_rows})")
+        
+    except FileNotFoundError as e:
+        logger.error(f"SQL file not found: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Query execution failed for {sql_path}: {e}", exc_info=True)
+        raise
 
 
 # ======================
@@ -103,18 +126,23 @@ def run_query(sql_path: str):
 # ======================
 
 def run_queries():
-
+    
+    """Execute all transform queries in sequence with delay between them."""
+    
+    logger.info(f"Starting query pipeline ({len(SQL_QUERIES)} queries)")
+    
     for i, path in enumerate(SQL_QUERIES):
-
-        run_query(path)
-
-        if i < len(SQL_QUERIES) - 1:
-
-            logger.info(
-                f"Sleeping {QUERY_DELAY_SECONDS}s before next query"
-            )
-
-            time.sleep(QUERY_DELAY_SECONDS)
+        try:
+            run_query(path)
+            
+            if i < len(SQL_QUERIES) - 1:
+                logger.info(f"Sleeping {QUERY_DELAY_SECONDS}s before next query ({i+1}/{len(SQL_QUERIES)})")
+                time.sleep(QUERY_DELAY_SECONDS)
+        except Exception as e:
+            logger.error(f"Pipeline failed at query {i+1}/{len(SQL_QUERIES)}: {path}")
+            raise
+    
+    logger.info(f"All {len(SQL_QUERIES)} queries completed successfully")
 
 
 # ======================

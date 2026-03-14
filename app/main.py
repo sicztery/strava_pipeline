@@ -23,10 +23,7 @@ def main():
         run_pipeline()
 
     elif mode == "create_sub":
-        create_subscription()
-
-    elif mode == "trigger":
-        run_trigger()   
+        create_subscription() 
 
     elif mode == "bq_transform":
         run_transform()     
