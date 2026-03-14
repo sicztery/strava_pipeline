@@ -1,4 +1,5 @@
 import json
+import os
 import logging
 import time
 import uuid
@@ -17,6 +18,9 @@ from app.staging.transformer import transform_activity
 from app.staging.writer import write_staging
 from app.pubsub import publish_event
 
+
+PIPELINE_FINISHED_TOPIC = os.getenv(
+    "STRAVA_PUBSUB_TOPIC2")
 
 
 # ======================
@@ -117,7 +121,7 @@ def run_pipeline():
                 run_id,
                 "PIPELINE_END",
                 "OK",
-                "No new activities returned by API – nothing to process"
+                "No new activities returned by API - nothing to process"
             )
             return
      
@@ -263,6 +267,17 @@ def run_pipeline():
             "Pipeline run finished successfully"
         )
         
+        
+        publish_event(
+            {
+                "type": "pipeline_finished",
+                "source": "strava_pipeline",
+                "timestamp": time.time(),
+                "run_id": run_id,
+                "status": "success"
+            },
+            topic=PIPELINE_FINISHED_TOPIC
+        )
 
     except Exception as e:
         log_event(
@@ -274,14 +289,6 @@ def run_pipeline():
         )
         raise   
 
-publish_event(
-    {
-        "type": "pipeline_finished",
-        "source": "strava_pipeline",
-        "timestamp": time.time()
-    },
-    topic="strava-pipeline-finished"
-)    
 
 if __name__ == "__main__":
     run_pipeline()

@@ -25,7 +25,6 @@ QUERY_DELAY_SECONDS = 5
 last_run = 0
 
 # Tracks recently processed message IDs to handle duplicates
-# In production, consider using Redis or Datastore for distributed deployments
 processed_messages = {}
 MESSAGE_ID_RETENTION = 3600  # Keep message IDs for 1 hour
 
