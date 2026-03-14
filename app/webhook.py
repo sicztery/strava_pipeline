@@ -12,6 +12,17 @@ import hashlib
 from app.gcp_secrets import get_secret
 
 # ======================
+# LOGGING - MUST BE FIRST
+# ======================
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+logger = logging.getLogger("strava_pipeline")
+
+# ======================
 # ENV
 # ======================
 
@@ -47,17 +58,6 @@ JOB_NAME = os.getenv("STRAVA_WORKER_JOB")
 WEBHOOK_COOLDOWN_SECONDS = int(os.getenv("WEBHOOK_COOLDOWN_SECONDS", "180"))
 
 last_job_trigger = 0
-
-# ======================
-# LOGGING
-# ======================
-
-logging.basicConfig(
-    level=logging.DEBUG,  # Changed from INFO to DEBUG
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-
-logger = logging.getLogger("strava_pipeline")
 
 logger.info(
     f"Webhook service starting - Cloud Run trigger enabled for job: {JOB_NAME}"

@@ -135,7 +135,7 @@
                                           └──────────────────────┘                                             │
 │                                                                                                              │
 │  ┌──────────────────────┐                                                                                    │
-│  │ Artifact Registry    │◄──── Cloud Build (CI/CD via cloudbuild.yaml) ─────────────────────────────────┤    │
+│  │ Artifact Registry    │◄──── Cloud Build (CI/CD via cloudbuild.yaml) ──────────────────────────────────────┤    │
 │  │ - Docker images      │                                                                                    │
 │  │ - version tagged     │                                                                                    │
 │  └──────────────────────┘                                                                                    │
