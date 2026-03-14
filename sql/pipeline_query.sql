@@ -64,7 +64,7 @@ SELECT
   SAFE_CAST(is_private AS BOOL),
   SAFE_CAST(is_commute AS BOOL),                            
   SAFE_CAST(is_manual AS BOOL),   
-  SAFE_CAST(ingest_ts AS TIMESTAMP)
+  COALESCE(SAFE_CAST(ingest_ts AS TIMESTAMP), CURRENT_TIMESTAMP())
 FROM `${PROJECT_ID}.${DATASET}.strava_raw_ext`
 -- Only insert NEW activities that aren't already in `main` (deduplication)
 WHERE SAFE_CAST(activity_id AS INT64) NOT IN (

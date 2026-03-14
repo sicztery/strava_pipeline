@@ -6,17 +6,13 @@ from google.cloud import run_v2
 import os
 import logging
 import time
-import hmac
-import hashlib
-
-from app.gcp_secrets import get_secret
 
 # ======================
 # LOGGING - MUST BE FIRST
 # ======================
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
@@ -32,25 +28,12 @@ PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
 if not PROJECT_ID:
     raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
 
-# Pobierz STRAVA_CLIENT_SECRET z Google Secret Manager
-# (to jest ten sam secret co w auth_client.py dla OAuth)
-_raw_secret = get_secret("strava-client-secret", PROJECT_ID)
-
-# Secret Manager może przechowywać jako JSON lub plaintext
-# Jeśli jest JSON z kluczem "client_secret", rozpakuj go
-try:
-    import json as _json
-    _parsed = _json.loads(_raw_secret)
-    if isinstance(_parsed, dict) and "client_secret" in _parsed:
-        STRAVA_CLIENT_SECRET = _parsed["client_secret"]
-        logger.info("Parsed client_secret from JSON secret")
-    else:
-        STRAVA_CLIENT_SECRET = _raw_secret
-except:
-    # Nie jest JSON, użyj plaintext
-    STRAVA_CLIENT_SECRET = _raw_secret
-
-logger.info(f"STRAVA_CLIENT_SECRET loaded (length: {len(STRAVA_CLIENT_SECRET)})")
+# Strava IP ranges (from https://developers.strava.com/docs/#webhooks)
+# These are the IP ranges from which Strava sends webhook events
+STRAVA_IP_RANGES = [
+    "54.160.181.190/32",  # Observed in production
+    # Add more ranges from Strava documentation as needed
+]
 
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
 REGION = os.getenv("STRAVA_GCP_REGION", "europe-west1")
@@ -79,45 +62,32 @@ limiter = Limiter(
 # SECURITY FUNCTIONS
 # ======================
 
-def verify_strava_signature(request_body_bytes: bytes, signature: str) -> bool:
+def ip_in_range(ip: str, cidr: str) -> bool:
+    """Check if IP address is in CIDR range."""
+    from ipaddress import ip_address, ip_network
+    try:
+        return ip_address(ip) in ip_network(cidr, strict=False)
+    except ValueError:
+        return False
+
+
+def verify_strava_ip(request_ip: str) -> bool:
     """
-    Verify Strava webhook signature using HMAC SHA256.
-    
-    Strava sends X-Strava-Signature: v0=<HMAC_SHA256_hex>
-    HMAC is computed over (request_body + client_secret)
+    Verify that webhook request comes from Strava's IP ranges.
+    Uses X-Forwarded-For header (set by Cloud Run).
     """
-    if not STRAVA_CLIENT_SECRET:
-        logger.error("STRAVA_CLIENT_SECRET not configured!")
+    if not request_ip:
+        logger.error("Cannot determine request IP")
         return False
     
-    logger.debug(f"Secret length: {len(STRAVA_CLIENT_SECRET) if STRAVA_CLIENT_SECRET else 0}")
-    logger.debug(f"Payload bytes length: {len(request_body_bytes)}")
+    # Check if IP is in Strava's whitelist
+    for cidr in STRAVA_IP_RANGES:
+        if ip_in_range(request_ip, cidr):
+            logger.info(f"✓ IP verification passed: {request_ip}")
+            return True
     
-    if not signature or not signature.startswith("v0="):
-        logger.warning(f"Invalid signature format - signature exists: {bool(signature)}, format valid: {signature.startswith('v0=') if signature else False}")
-        return False
-    
-    expected_signature = signature.split("=", 1)[1]
-    logger.debug(f"Expected signature length: {len(expected_signature)}")
-    
-    # Compute HMAC SHA256
-    computed = hmac.new(
-        STRAVA_CLIENT_SECRET.encode(),
-        request_body_bytes,
-        hashlib.sha256
-    ).hexdigest()
-    
-    logger.debug(f"Computed signature length: {len(computed)}")
-    
-    # Timing-safe comparison to prevent timing attacks
-    is_valid = hmac.compare_digest(computed, expected_signature)
-    
-    if not is_valid:
-        logger.warning(f"Signature mismatch - computed: {computed[:16]}..., expected: {expected_signature[:16]}...")
-    else:
-        logger.info("✓ Signature verification passed")
-    
-    return is_valid
+    logger.error(f"IP {request_ip} not in Strava whitelist")
+    return False
 
 # ======================
 # VERIFICATION
@@ -150,26 +120,17 @@ def handle_verification():
 def handle_event():
     global last_job_trigger
     
-    logger.info(f"=== WEBHOOK POST from {request.remote_addr} ===")
+    # ===== SECURITY: IP Whitelist Verification =====
+    # Get the actual client IP from X-Forwarded-For header (set by Cloud Run)
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if not client_ip:
+        client_ip = request.remote_addr
     
-    # Log all headers
-    logger.info("ALL HEADERS:")
-    for header_name, header_value in request.headers:
-        if len(str(header_value)) > 100:
-            logger.info(f"  {header_name}: {str(header_value)[:100]}...")
-        else:
-            logger.info(f"  {header_name}: {header_value}")
+    logger.info(f"Webhook POST from IP: {client_ip}")
     
-    # Log request body
-    logger.info(f"REQUEST BODY: {request.data.decode('utf-8', errors='ignore')[:500]}")
-    
-    # ===== TEMP DEBUG: Skip signature verification =====
-    # TODO: Re-enable after debugging
-    logger.warning("!!! SIGNATURE VERIFICATION DISABLED FOR DEBUGGING !!!")
-    
-    # ===== TEMP DEBUG: Skip Authorization verification =====
-    # TODO: Re-enable after debugging
-    logger.warning("!!! AUTHORIZATION VERIFICATION DISABLED FOR DEBUGGING !!!")
+    if not verify_strava_ip(client_ip):
+        logger.error(f"Unauthorized IP: {client_ip} - rejecting request")
+        return jsonify({"error": "Unauthorized"}), 401
     
     # ===== VALIDATION: Parse Payload =====
     event = request.json
@@ -181,8 +142,6 @@ def handle_event():
     aspect_type = event.get("aspect_type")
     object_type = event.get("object_type")
     object_id = event.get("object_id")
-    
-    logger.info(f"Event details - aspect_type: {aspect_type}, object_type: {object_type}, object_id: {object_id}")
     
     if aspect_type != "create":
         logger.debug(f"Ignoring event - aspect_type: {aspect_type}")
