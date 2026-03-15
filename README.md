@@ -12,7 +12,7 @@ This approach reduces unnecessary API calls and enables near real-time processin
 ## How it works
 
 1. **Strava webhook** sends an event notification when an activity is created or updated.
-2. The webhook endpoint receives the event and triggers the pipeline.
+2. The **`webhook`** endpoint receives the event and triggers the pipeline.
 3. A worker fetches the full activity details from the Strava API.
 4. The processed activity data is **pushed to the configured downstream consumer** (database, storage, or other service).
 
@@ -29,6 +29,17 @@ The worker is **decoupled from webhook delivery**. While the primary flow is eve
 
 Both modes use the same state management logic to track processed activities, so they can coexist without conflicts.
 
+## Worker Architecture: strava_client
+
+The **`strava_client`** module serves as the core worker component and provides **complete and independent logic for querying the Strava API**. 
+
+Key aspects:
+
+- **API independence**: Encapsulates all Strava API communication, authentication, and request handling in a single, self-contained module.
+- **Reusable query logic**: The worker exposes a clean interface for fetching activity details and other Strava resources, making it easy to integrate with different triggering mechanisms (webhooks, scheduled jobs, etc.).
+- **Authentication management**: Handles token refresh and credential management transparently.
+- **Decoupled design**: Can be invoked independently without tight coupling to pipeline orchestration logic, enabling flexibility in deployment and testing.
+
 ## Key Characteristics
 
 * Event-driven architecture
@@ -43,9 +54,9 @@ The project is currently focused on reliability and internal use rather than bei
 
 ## Limitations
 
-- **State management**: Current state tracking via filesystem/database snapshots. No distributed consensus for concurrent runs.
 - **Error handling**: Limited retry logic for transient failures. Dead letter handling not yet implemented.
 - **Data model**: Pipeline assumes specific Strava activity schema. Schema changes upstream would require manual updates.
+- **Google Cloud optimization**: The pipeline is heavily optimized for Google Cloud Platform. Migrating to other cloud providers or on-premises deployments would require significant refactoring of infrastructure dependencies, secrets management, and deployment configurations.
 
 ## Future Development
 
