@@ -1,0 +1,146 @@
+#####                                                          #####
+##################### STRAVA ELT PIPELINE 2.0 ######################.,
+#####                                                          #####  ',
+                                                                        ,
+                                                                         ,
+
+1. strava_pipeline: 
+ │
+ ├── app/                                                                  ,
+ │   │
+ │   ├── main.py                   # entry point, Cloud Run handler
+ │   ├── webhook.py                # Strava webhook receiver & processor
+ │   ├── strava_client.py          # orchestrator (main, scheduled runs)
+ │   ├── create_subscription.py    # script to create webhook subscriptions
+ │   ├── gcp_secrets.py            # secrets handler for GCP Secret Manager
+ │   │
+ │   ├── auth/                     
+ │   │   │
+ │   │   └── auth_client.py        # OAuth 2.0 authentication
+ │   │                               token refresh, exchange, validation
+ │   │                                                                      , 
+ │   ├── state/                    
+ │   │   │
+ │   │   └── state_manager.py      # load/save last_seen (timestamp + id)
+ │   │                               json handling in Google Cloud Storage
+ │   ├── api/                      
+ │   │   │
+ │   │   └── strava_api.py         # Strava HTTP requests
+ │   │
+ │   ├── ingest/                   
+ │   │   │
+ │   │   ├── filter.py             # if-there's-new-activity logic
+ │   │   └── raw_writer.py         # append-only RAW saving (data lake)
+ │   │
+ │   └── staging/                  
+ │       │
+ │       ├── transformer.py        # initial data cleaning and transforming
+ │       ├── stage_writer.py       # write transformed data to staging
+ │       └── query_trigger.py      # execute SQL transformations
+ │
+ ├── sql/                          
+ │   │ 
+ │   ├── pipeline_query.sql        # records data do main table
+ │   └── pipeline_dash.sql         # analitical view for BI tools
+ │   
+ │   
+ │   
+ │
+ ├── cloudbuild.yaml               
+ ├── Dockerfile                    
+ ├── README.md                     
+ ├── requirements.txt              # Python dependencies
+ ├── scheme.txt                    # this file
+ └── LICENCE                                                     
+
+                                                                             ,
+
+
+2. Google Cloud Platform Deploy scheme (full ELT pipeline):
+
+          ┌─────────────────────────────────────────────────GCP PROJECT────────────────────────────────────────┐
+          │                                                                                                    │
+     ┌────┴─────────┐                           ┌──────────────┐                                               │
+     │  Scheduler   │                           │   Webhooks   │        ┌────────────────────┐                 │
+     │  (CRON 24h)  │                           │ (Real-time)  │        │ Secret Manager     │                 │
+     │              │                           │              │        │ - STRAVA_CLIENT    │                 │
+     └────┬─────────┘                           └───┬──────────┘        │ - STRAVA_SECRET    │                 │
+          │                                         │                   │ - REFRESH_TOKEN    │                 │
+          └──────────────────┬──────────────────────┘                   └────────┬───────────┘                 │
+                             │ HTTP trigger                                      │                             │
+                             ▼                                                   ▼                             │
+                 ┌─────────────────────────────────────────────────┐                                           │
+                 │         Cloud Run Service (Docker)              │                                           │
+                 │         python -m app.main /arg. worker         │                                           │
+                 │                                                 │                                           │
+                 │  ┌──────────────────────────────────────────┐   │                                           │
+                 │  │   1 AUTH MODULE (auth/)                  │   │                                           │
+                 │  │   ├─ OAuth2 token refresh                │   │◄─────────────┐                            │
+                 │  │   └─ validate credentials                │   │              │ (secrets)                  │
+                 │  └─────────────┬────────────────────────────┘   │              │                            │
+                 │                │                                │              │                            │
+                 │  ┌─────────────▼──────────────────────────┐     │              └─────────────┐              │
+                 │  │   2  API MODULE (api/)                 │     │                            │              │
+                 │  │   └─ HTTPS requests from Strava        │     │──── HTTPS ────────────► Strava API        │
+                 │  └─────────────┬──────────────────────────┘     │                                           │
+                 │                │                                │                                           │
+                 │  ┌─────────────▼──────────────────────────┐     │                                           │
+                 │  │   3 INGEST MODULE (ingest/)            │     │                                           │
+                 │  │   ├─ filter new activities             │     │                                           │
+                 │  │   └─ flatten payload                   │     │                                           │
+                 │  └─────────────┬──────────────────────────┘     │                                           │
+                 │                │                                │                                           │
+                 │  ┌─────────────▼──────────────────────────┐     │                                           │
+                 │  │   4  STATE MODULE (state/)             │     │                                           │
+                 │  │   ├─ load last_seen checkpoint         │     │                                           │
+                 │  │   └─ save new state to GCS             │     │                                           │
+                 │  └─────────────┬──────────────────────────┘     │                                           │
+                 │                │                                │                                           │
+                 │  ┌─────────────▼──────────────────────────┐     │                                           │
+                 │  │   5  RAW WRITE (ingest/)               │     │                                           │
+                 │  │   └─ append-only to GCS (jsonl)        │     │                                           │
+                 │  └─────────────┬──────────────────────────┘     │                                           │
+                 │                │                                │                                           │
+                 │  ┌─────────────▼──────────────────────────┐     │                                           │
+                 │  │   6  STAGING TRANSFORM (staging/)      │     │                                           │
+                 │  │   ├─ clean & deduplicate data          │     │                                           │
+                 │  │   └─ flatten nested objects            │     │                                           │
+                 │  └─────────────┬──────────────────────────┘     │                                           │
+                 │                │                                │                                           │
+                 │  ┌─────────────▼──────────────────────────┐     │                                           │
+                 │  │   7  TRIGGER SQL (staging/)            │     │                                           │
+                 │  │   └─ execute BigQuery transformations  │     │                                           │
+                 │  └─────────────┬──────────────────────────┘     │                                           │
+                 └────────────────┼────────────────────────────────┘                                           │
+                                  │                                                                            │
+                ┌─────────────────┴──────────────────────┐                                                     │
+                │                                        │                                                     │
+                ▼                                        ▼                                                     │
+    ┌──────────────────────┐              ┌─────────────────────────────────┐                                  │
+    │ GCS (Data Lake)      │              │  BigQuery (Data Warehouse)      │                                  │
+    │                      │              │                                 │                                  │
+    │ ├─ raw/ (jsonl)      │              │ ├─ pipeline_query.sql           │                                  │
+    │ └─ state.json        │              │ │                               │                                  │
+    │    checkpoint        │              │ └─ pipeline_dash.sql            │                                  │
+    └──────────────────────┘              │    (dashboard analytical view)  │                                  │
+                                          │                                 │                                  │
+                                          └──────────────────────────┬──────┘                                  │
+                                                                     │                                         │
+                                                    ┌────────────────┘                                         │
+                                                    │                                                          │
+                                                    ▼                                                          │
+                                          ┌──────────────────────┐                                             │
+                                          │ BI Tools / Dashboards│                                             │
+                                          │ (Data Studio, etc.)  │                                             │
+                                          └──────────────────────┘                                             │
+│                                                                                                              │
+│  ┌──────────────────────┐                                                                                    │
+│  │ Artifact Registry    │◄──── Cloud Build (CI/CD via cloudbuild.yaml) ──────────────────────────────────────┤    
+│  │ - Docker images      │                                                                                    │
+│  │ - version tagged     │                                                                                    │
+│  └──────────────────────┘                                                                                    │
+│                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
