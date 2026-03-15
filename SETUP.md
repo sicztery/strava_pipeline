@@ -1,250 +1,245 @@
-# Setup & Configuration Guide
+# Setup and Configuration Guide
 
 ## Overview
 
-The Strava Pipeline consists of three main execution modes, each with a distinct role:
+The Strava Pipeline has three execution modes:
 
 | Mode | Type | Purpose | Trigger |
 |------|------|---------|---------|
-| `webhook` | Service | Listens for Strava events and triggers the worker job | Cloud Run service (always running) |
-| `worker` | Job | Fetches and processes activity data from Strava API | Cloud Run job (scheduled or event-driven) |
-| `create_sub` | One-time Job | Sets up Strava webhook subscription (run once during setup) | Manual execution |
+| `webhook` | Service | Receives Strava webhook events and triggers worker runs | Cloud Run service |
+| `worker` | Job | Fetches Strava activities, writes data, executes SQL pipeline | Cloud Run job |
+| `create_sub` | One-time Job | Creates/recreates Strava webhook subscription | Manual run |
 
-## Entrypoint: main.py
-
-The **`main.py`** file acts as a **router** that directs execution to the appropriate mode based on a container argument:
+Entrypoint routing:
 
 ```bash
-# Start webhook service
 python -m app.main webhook
-
-# Run worker job
 python -m app.main worker
-
-# Create subscription (one-time setup)
 python -m app.main create_sub
 ```
 
-The Docker container is invoked with these arguments by Cloud Run, determining which component runs.
+## Identity Model (Least Privilege)
 
----
+Use separate service accounts. Do not run all components with one broad account.
 
-## Execution Modes
+Suggested principals:
 
-### 1. Webhook Service (`webhook` mode)
+| Principal | Used by | Responsibility |
+|----------|---------|----------------|
+| `sa-webhook` | Cloud Run service (`webhook`) | Invoke worker job on incoming event |
+| `sa-worker` | Cloud Run job (`worker`) | Read/write state and data, call Strava, run BigQuery |
+| `sa-create-sub` | Cloud Run job (`create_sub`) | Read Strava app secrets and create webhook subscription |
+| `sa-scheduler` | Cloud Scheduler | Invoke Cloud Run worker job |
+| `sa-cloud-build` | Cloud Build runtime | Build image and push to Artifact Registry |
+| `ci-cd-operator` (user or SA) | CI/CD administration | Edit Cloud Build pipeline config/triggers |
 
-**Role:** Real-time event listener and job orchestrator
+## Minimum IAM Permissions
 
-The webhook service:
-- Runs as a **persistent Cloud Run service** (always listening)
-- Receives HTTP POST requests from Strava when an activity is created/updated
-- Validates incoming events (token verification, rate limiting)
-- **Triggers the worker Cloud Run job** when a valid activity event arrives
-- Implements cooldown logic to prevent excessive job triggers
+### 1) `sa-worker` (runtime worker)
 
-**Key Features:**
-- Rate limiting (30 req/min per IP, 200/day global)
-- Token-based security (`WEBHOOK_VERIFY_TOKEN`)
-- Cooldown mechanism (`WEBHOOK_COOLDOWN_SECONDS`) to avoid redundant worker invocations
-- Uses `google-cloud-run` client to trigger worker jobs
+Scope IAM as narrowly as possible (dataset, bucket, specific secrets).
 
-**Configuration:**
-- Exposed on Cloud Run as an HTTPS endpoint
-- PORT defaults to `8080`
+Required:
 
----
+- `roles/storage.objectAdmin` on the pipeline bucket (or a custom role with:
+  `storage.buckets.get`, `storage.objects.get`, `storage.objects.create`)
+- `roles/bigquery.jobUser` on project (required to create query jobs)
+- `roles/bigquery.dataEditor` on dataset `BQ_DATASET` (required for `INSERT INTO`)
+- `roles/secretmanager.secretAccessor` on:
+  - `strava-client-id`
+  - `strava-client-secret`
+  - `strava-refresh-token`
 
-### 2. Worker Job (`worker` mode) / `strava_client`
+If refresh token rotation writes a new secret version:
 
-**Role:** Core activity ingestion and transformation logic
+- `roles/secretmanager.secretVersionAdder` on `strava-refresh-token`
 
-The worker:
-- Runs as a **Cloud Run job** (stateless, ephemeral execution)
-- Can be triggered by:
-  - **Webhook** (event-driven, real-time)
-  - **Cloud Scheduler** (cron-based, periodic safety net)
-- Executes the complete data pipeline:
-  1. Authenticates with Strava API
-  2. Loads last-seen state from Cloud Storage
-  3. Fetches new activities from Strava API
-  4. Filters and deduplicates activities
-  5. Writes raw data to Cloud Storage
-  6. Transforms and stages data in BigQuery
-  7. Executes analytics pipeline queries
-  8. Saves updated state back to Cloud Storage
+If your process also needs to manage secret version lifecycle (enable/disable/destroy):
 
-**Pipeline Flow:**
-```
-Load State → Fetch Strava API → Filter Duplicates → Write Raw (GCS) 
-  → Transform → Write Staging (BigQuery) → Run Queries
-```
+- `roles/secretmanager.secretVersionManager` on `strava-refresh-token`
 
-**State Management:**
-- Tracks `last_seen_timestamp` and `last_seen_activity_id` to avoid reprocessing
-- State persisted in Cloud Storage
+### 2) `sa-webhook` (runtime webhook)
 
----
+Required to trigger worker Cloud Run job:
 
-### 3. Create Subscription Job (`create_sub` mode)
+- `roles/run.jobsExecutor` on the target worker job  
+  (If your organization does not use this role, use `roles/run.invoker` as fallback.)
 
-**Role:** One-time setup for Strava webhook integration
+### 3) `sa-create-sub` (subscription bootstrap job)
 
-The subscription creator:
-- Runs as a **one-time Cloud Run job** (executed manually during deployment)
-- Calls Strava's push subscription API to register the webhook endpoint
-- Validates the callback URL is accessible from Strava
-- **Run this once after deploying the webhook service**
+Required:
 
-**When to use:**
-```bash
-# After webhook service is deployed and ready to receive traffic
-python -m app.main create_sub
-```
+- `roles/secretmanager.secretAccessor` on:
+  - `strava-client-id`
+  - `strava-client-secret`
 
----
+No BigQuery or GCS permissions are required for this mode.
+
+### 4) `sa-scheduler` (Cloud Scheduler caller)
+
+Required:
+
+- `roles/run.invoker` (or `roles/run.jobsExecutor`) on worker job
+
+This account is used in Scheduler OIDC auth when calling `jobs:run`.
+
+### 5) `sa-cloud-build` (build runtime)
+
+Required:
+
+- `roles/artifactregistry.writer` on target Artifact Registry repository
+
+### 6) `ci-cd-operator` (build pipeline editor)
+
+Required:
+
+- `roles/cloudbuild.builds.editor`
+
+Use this only for identities that must edit Cloud Build definitions/triggers.
 
 ## Environment Variables
 
-### Required Variables
+### Required
 
 | Variable | Type | Example | Used By |
 |----------|------|---------|---------|
 | `STRAVA_GCP_PROJECT` | String | `my-gcp-project-id` | All modes |
-| `BUCKET_NAME` | String | `strava-pipeline-bucket` | Worker, state manager |
-| `BQ_DATASET` | String | `strava_raw` | Worker (BigQuery) |
+| `BUCKET_NAME` | String | `strava-pipeline-bucket` | Worker |
+| `BQ_DATASET` | String | `strava_raw` | Worker |
 | `WEBHOOK_VERIFY_TOKEN` | String | `abc123xyz` | Webhook, create_sub |
-| `WEBHOOK_CALLBACK_URL` | String | `https://webhook-service-url.run.app/webhook` | create_sub |
+| `WEBHOOK_CALLBACK_URL` | String | `https://my-webhook.run.app/webhook` | create_sub |
+| `STRAVA_WORKER_JOB` | String | `strava-worker` | Webhook |
 
-### Optional Variables
+### Optional
 
 | Variable | Default | Used By |
 |----------|---------|---------|
 | `STRAVA_GCP_REGION` | `europe-west1` | Webhook |
-| `BQ_LOCATION` | `europe-west1` | Worker (BigQuery queries) |
+| `BQ_LOCATION` | `europe-west1` | Worker |
 | `WEBHOOK_COOLDOWN_SECONDS` | `180` | Webhook |
-| `STRAVA_WORKER_JOB` | *(required)* | Webhook (must match Cloud Run job name) |
-| `PORT` | `8080` | Webhook service |
+| `PORT` | `8080` | Webhook |
 
-### Secrets in Google Secret Manager
+## Secret Manager vs GCS State
 
-The following credentials are fetched from **Google Secret Manager** (project: `STRAVA_GCP_PROJECT`):
+Clarification:
+
+- `strava-refresh-token` is stored in **Secret Manager**.
+- `strava-auth-state` is **not a secret**. It is persisted as state in **GCS**.
+
+### Secret Manager objects
 
 | Secret Name | Used By | Purpose |
-|------------|---------|---------|
-| `strava-client-id` | Worker, create_sub | OAuth client ID for Strava API |
-| `strava-client-secret` | Worker, create_sub | OAuth client secret for Strava API |
-| `strava-refresh-token` | Worker | Refresh token for offline API access |
+|-------------|---------|---------|
+| `strava-client-id` | Worker, create_sub | Strava OAuth client id |
+| `strava-client-secret` | Worker, create_sub | Strava OAuth client secret |
+| `strava-refresh-token` | Worker | Strava OAuth refresh token |
 
----
+## Cloud Storage Setup
 
-## Cloud Storage Bucket Setup
+The worker uses `BUCKET_NAME` for raw payloads, staging payloads, and pipeline state.
 
-The pipeline uses a **Google Cloud Storage bucket** (`BUCKET_NAME`) to store:
+Structure:
 
-### Structure:
-
-```
+```text
 gs://BUCKET_NAME/
-├── state/
-│   └── last_seen.json          # Current pipeline state (timestamp, activity_id)
-├── raw/
-│   └── {date}/{activity_id}.json  # Raw activity JSON from Strava API
-└── staging/
-    └── (optional) transformed data before BigQuery
+  state/
+    strava_state.json
+  raw/
+    strava/YYYY/MM/DD/activities_<run_id>.jsonl
+  staging/
+    strava/YYYY/MM/DD/activities_<run_id>.jsonl
 ```
 
-### Bucket Permissions:
-
-The service account running the pipeline requires:
-- `storage.objects.get` – Load state
-- `storage.objects.create` – Write raw data and state
-- `storage.buckets.get` – Verify bucket existence
-
-### Initialization:
-
-Create the bucket and directory structure:
+Initialization:
 
 ```bash
-# Create bucket
 gsutil mb -l europe-west1 gs://strava-pipeline-bucket
-
-# Create initial state file (optional)
 echo '{"last_seen_timestamp": 0, "last_seen_activity_id": 0}' | \
-  gsutil cp - gs://strava-pipeline-bucket/state/last_seen.json
+  gsutil cp - gs://strava-pipeline-bucket/state/strava_state.json
 ```
-
----
 
 ## BigQuery Setup
 
-The pipeline writes activity data to **BigQuery** tables in dataset `BQ_DATASET`.
+The worker executes SQL from `sql/pipeline_query.sql`.
 
-### Required Tables:
+Current SQL writes into:
 
-- **`raw_activities`** – Raw activity data from Strava API (one row per activity)
-- **`staging_activities`** – Transformed, deduplicated activity data (staging layer)
+- `${PROJECT_ID}.${BQ_DATASET}.strava_main`
 
-### BigQuery Permissions:
+Current SQL reads from:
 
-The service account requires:
-- `bigquery.datasets.get` – Dataset access
-- `bigquery.tables.get` – Table metadata
-- `bigquery.tables.create` – Create tables (if not pre-created)
-- `bigquery.tables.update` – Update table schema
-- `bigquery.tabledata.insertAll` – Insert rows
+- `${PROJECT_ID}.${BQ_DATASET}.strava_raw_ext`
 
-### Schema Example:
+You must create dataset/tables/views/external tables required by that SQL before first run, unless your deployment automation creates them.
 
-See [pipeline_schema.sql](./sql/pipeline_query.sql) for table definitions.
+## Build and Deploy
 
----
-
-## Docker & Cloud Run Deployment
-
-### Building the Docker Image
+### Build image
 
 ```bash
 docker build -t strava-pipeline:latest .
 ```
 
-The `Dockerfile` uses `main.py` as the entrypoint, respecting the mode argument.
-
-### Deploying Webhook Service
+### Deploy webhook service
 
 ```bash
 gcloud run deploy strava-webhook \
-  --image strava-pipeline:latest \
-  --platform managed \
+  --image REGION-docker.pkg.dev/PROJECT/REPO/strava-pipeline:latest \
   --region europe-west1 \
-  --timeout 30 \
-  --set-env-vars "STRAVA_GCP_PROJECT=my-project,BUCKET_NAME=my-bucket,BQ_DATASET=strava_raw,WEBHOOK_VERIFY_TOKEN=secret,STRAVA_WORKER_JOB=strava-worker" \
+  --service-account sa-webhook@PROJECT_ID.iam.gserviceaccount.com \
+  --set-env-vars "STRAVA_GCP_PROJECT=PROJECT_ID,WEBHOOK_VERIFY_TOKEN=TOKEN,STRAVA_WORKER_JOB=strava-worker,STRAVA_GCP_REGION=europe-west1" \
   --args "webhook"
 ```
 
-### Deploying Worker Job
+### Deploy worker job
 
 ```bash
 gcloud run jobs create strava-worker \
-  --image strava-pipeline:latest \
-  --platform managed \
+  --image REGION-docker.pkg.dev/PROJECT/REPO/strava-pipeline:latest \
   --region europe-west1 \
-  --task-timeout 600 \
-  --set-env-vars "STRAVA_GCP_PROJECT=my-project,BUCKET_NAME=my-bucket,BQ_DATASET=strava_raw" \
+  --service-account sa-worker@PROJECT_ID.iam.gserviceaccount.com \
+  --set-env-vars "STRAVA_GCP_PROJECT=PROJECT_ID,BUCKET_NAME=strava-pipeline-bucket,BQ_DATASET=strava_raw,BQ_LOCATION=europe-west1" \
   --args "worker"
 ```
 
-### Triggering Worker with Cloud Scheduler (Optional)
+### Deploy create_sub job
 
 ```bash
-gcloud scheduler jobs create cloud-run strava-worker-schedule \
-  --location europe-west1 \
-  --schedule "0 * * * *" \
-  --http-method POST \
-  --uri "https://region-project.cloudjobs.googleapis.com/v1/projects/project/locations/region/jobs/strava-worker:run" \
-  --oidc-service-account-email "your-sa@project.iam.gserviceaccount.com"
+gcloud run jobs create strava-create-sub \
+  --image REGION-docker.pkg.dev/PROJECT/REPO/strava-pipeline:latest \
+  --region europe-west1 \
+  --service-account sa-create-sub@PROJECT_ID.iam.gserviceaccount.com \
+  --set-env-vars "STRAVA_GCP_PROJECT=PROJECT_ID,WEBHOOK_VERIFY_TOKEN=TOKEN,WEBHOOK_CALLBACK_URL=https://my-webhook.run.app/webhook" \
+  --args "create_sub"
 ```
 
----
+### Run one-time webhook subscription setup
+
+```bash
+gcloud run jobs execute strava-create-sub --region europe-west1
+```
+
+## Cloud Scheduler (Optional)
+
+Example (hourly):
+
+```bash
+gcloud scheduler jobs create http strava-worker-schedule \
+  --location=europe-west1 \
+  --schedule="0 * * * *" \
+  --http-method=POST \
+  --uri="https://run.googleapis.com/v2/projects/PROJECT_ID/locations/europe-west1/jobs/strava-worker:run" \
+  --oidc-service-account-email="sa-scheduler@PROJECT_ID.iam.gserviceaccount.com"
+```
+
+## Cloud Build and Artifact Registry (CI/CD)
+
+Your CI pipeline needs:
+
+- Cloud Build runtime SA with `roles/artifactregistry.writer`
+- CI/CD operator identity with `roles/cloudbuild.builds.editor`
+
+`cloudbuild.yaml` builds and publishes `${_IMAGE}`. Ensure `_IMAGE` points to your Artifact Registry path.
 
 ## Local Development
 
@@ -252,11 +247,10 @@ gcloud scheduler jobs create cloud-run strava-worker-schedule \
 
 ```bash
 pip install -r requirements.txt
+gcloud auth application-default login
 ```
 
-### Environment Setup
-
-Create a `.env` file in the project root:
+### `.env` example
 
 ```env
 STRAVA_GCP_PROJECT=my-project
@@ -269,43 +263,34 @@ BQ_LOCATION=europe-west1
 STRAVA_GCP_REGION=europe-west1
 ```
 
-For local development, ensure you have:
-- **Google Cloud SDK** (`gcloud` CLI)
-- **Authenticated credentials** (`gcloud auth application-default login`)
-- Access to the GCP project resources (Cloud Storage, BigQuery, Secret Manager)
-
-### Running Modes Locally
+### Run modes locally
 
 ```bash
-# Run webhook service
 python -m app.main webhook
-
-# Run worker job
 python -m app.main worker
-
-# Run subscription setup
 python -m app.main create_sub
 ```
 
----
-
 ## Troubleshooting
 
-### Webhook service not receiving events
-- Verify `WEBHOOK_CALLBACK_URL` is publicly accessible
-- Check that `WEBHOOK_VERIFY_TOKEN` matches Strava configuration
-- Use `create_sub` to recreate the subscription with the correct URL
+### Webhook cannot trigger worker job
 
-### Worker job fails with BigQuery errors
-- Ensure `BQ_DATASET` exists and service account has write permissions
-- Verify table schemas match expected column names
-- Check `BQ_LOCATION` matches your dataset region
+- Verify `sa-webhook` has `run.jobsExecutor` (or `run.invoker`) on worker job
+- Verify `STRAVA_WORKER_JOB` and `STRAVA_GCP_REGION` are correct
 
-### State not persisting between runs
-- Verify `BUCKET_NAME` exists and service account has write permissions
-- Check Cloud Storage IAM roles include `roles/storage.objectAdmin` or equivalent
+### Worker fails on BigQuery `INSERT INTO`
 
-### Rate limiting on webhook
-- Adjust `WEBHOOK_COOLDOWN_SECONDS` to prevent excessive worker triggers
-- Monitor Cloud Run logs for rate limit hits
+- Verify `sa-worker` has `roles/bigquery.jobUser` on project
+- Verify `sa-worker` has `roles/bigquery.dataEditor` on dataset
+- Verify `BQ_LOCATION` matches dataset region
 
+### Worker fails to read/write GCS
+
+- Verify bucket name and region
+- Verify `sa-worker` bucket permissions (`storage.objects.get/create` at minimum)
+
+### Secret read/write errors
+
+- Verify secret names exist
+- Verify `secretAccessor` on required secrets
+- If rotating refresh token versions, verify `secretVersionAdder`

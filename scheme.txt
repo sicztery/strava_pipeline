@@ -51,7 +51,7 @@
  ├── README.md                     
  ├── requirements.txt              # Python dependencies
  ├── scheme.txt                    # this file
- └── LICENCE                                                     
+ └── LICENSE                                                     
 
                                                                              ,
 
