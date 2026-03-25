@@ -19,9 +19,43 @@ STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 logger = logging.getLogger("strava_pipeline")
 
 
+def _extract_refresh_token(raw_value: str) -> str:
+    try:
+        data = json.loads(raw_value)
+    except json.JSONDecodeError:
+        token = raw_value.strip()
+        if not token:
+            raise RuntimeError("Empty refresh token in auth state secret")
+        logger.warning(
+            "Auth state secret is not JSON; using raw value as refresh token"
+        )
+        return token
+
+    if isinstance(data, dict) and "refresh_token" in data:
+        return data["refresh_token"]
+
+    if isinstance(data, str):
+        # Handle double-encoded JSON or a raw token string
+        try:
+            nested = json.loads(data)
+            if isinstance(nested, dict) and "refresh_token" in nested:
+                return nested["refresh_token"]
+        except json.JSONDecodeError:
+            token = data.strip()
+            if token:
+                logger.warning(
+                    "Auth state secret is a string; using it as refresh token"
+                )
+                return token
+
+    raise RuntimeError(
+        "Auth state secret must be JSON with refresh_token or a raw token string"
+    )
+
+
 def get_access_token() -> str:
     refresh_state = get_secret(AUTH_STATE_SECRET)
-    refresh_token = json.loads(refresh_state)["refresh_token"]
+    refresh_token = _extract_refresh_token(refresh_state)
 
     response = requests.post(
         STRAVA_TOKEN_URL,
