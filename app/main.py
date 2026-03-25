@@ -1,7 +1,4 @@
 import sys
-from app.webhook import run_webhook
-from app.create_subscription import create_subscription
-from app.strava_client import run_pipeline
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -14,13 +11,16 @@ def main():
     logger.info(f"Starting mode: {mode}")
 
     if mode == "webhook":
+        from app.webhook import run_webhook
         run_webhook()
 
     elif mode == "worker":
+        from app.strava_client import run_pipeline
         run_pipeline()
 
     elif mode == "create_sub":
-        create_subscription() 
+        from app.create_subscription import create_subscription
+        create_subscription()
 
     else:
         raise ValueError(f"Unknown mode: {mode}")

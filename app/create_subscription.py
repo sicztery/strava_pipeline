@@ -14,43 +14,53 @@ logging.basicConfig(
 logger = logging.getLogger("strava_pipeline")
 
 SECRET_PREFIX = os.getenv("SECRET_PREFIX", "strava")
-CLIENT_ID_SECRET = os.getenv("STRAVA_CLIENT_ID_SECRET", f"{SECRET_PREFIX}-client-id")
-CLIENT_SECRET_SECRET = os.getenv("STRAVA_CLIENT_SECRET_SECRET", f"{SECRET_PREFIX}-client-secret")
-
-VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
-if not VERIFY_TOKEN:
-    raise RuntimeError("Missing env var: WEBHOOK_VERIFY_TOKEN")
-
-CALLBACK_URL = os.getenv("WEBHOOK_CALLBACK_URL")
-if not CALLBACK_URL:
-    raise RuntimeError("Missing env var: WEBHOOK_CALLBACK_URL")
-
-CLIENT_ID = get_secret(CLIENT_ID_SECRET)
-CLIENT_SECRET = get_secret(CLIENT_SECRET_SECRET)
+CLIENT_ID_SECRET = os.getenv(
+    "STRAVA_CLIENT_ID_SECRET",
+    f"{SECRET_PREFIX}-client-id"
+)
+CLIENT_SECRET_SECRET = os.getenv(
+    "STRAVA_CLIENT_SECRET_SECRET",
+    f"{SECRET_PREFIX}-client-secret"
+)
 
 BASE_URL = "https://www.strava.com/api/v3/push_subscriptions"
 
 
-def list_subscriptions():
+def _load_config():
+    verify_token = os.getenv("WEBHOOK_VERIFY_TOKEN")
+    if not verify_token:
+        raise RuntimeError("Missing env var: WEBHOOK_VERIFY_TOKEN")
+
+    callback_url = os.getenv("WEBHOOK_CALLBACK_URL")
+    if not callback_url:
+        raise RuntimeError("Missing env var: WEBHOOK_CALLBACK_URL")
+
+    client_id = get_secret(CLIENT_ID_SECRET)
+    client_secret = get_secret(CLIENT_SECRET_SECRET)
+
+    return client_id, client_secret, verify_token, callback_url
+
+
+def list_subscriptions(client_id: str, client_secret: str):
     r = requests.get(
         BASE_URL,
         params={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
+            "client_id": client_id,
+            "client_secret": client_secret,
         }
     )
     r.raise_for_status()
     return r.json()
 
 
-def delete_subscription(sub_id):
+def delete_subscription(sub_id: int, client_id: str, client_secret: str):
     logger.info(f"Deleting existing subscription: {sub_id}")
 
     r = requests.delete(
         f"{BASE_URL}/{sub_id}",
         params={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
+            "client_id": client_id,
+            "client_secret": client_secret,
         }
     )
 
@@ -58,22 +68,23 @@ def delete_subscription(sub_id):
 
 
 def create_subscription():
+    client_id, client_secret, verify_token, callback_url = _load_config()
 
     logger.info("Checking existing subscriptions")
 
-    subs = list_subscriptions()
+    subs = list_subscriptions(client_id, client_secret)
 
     if subs:
         for sub in subs:
-            delete_subscription(sub.get("id"))
+            delete_subscription(sub.get("id"), client_id, client_secret)
 
     logger.info("Creating new Strava webhook subscription")
 
     payload = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "callback_url": CALLBACK_URL,
-        "verify_token": VERIFY_TOKEN,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "callback_url": callback_url,
+        "verify_token": verify_token,
     }
 
     r = requests.post(BASE_URL, data=payload, timeout=30)
