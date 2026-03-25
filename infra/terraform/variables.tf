@@ -1,0 +1,100 @@
+variable "aws_region" {
+  type = string
+}
+
+variable "project_name" {
+  type    = string
+  default = "strava-pipeline"
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "public_subnet_ids" {
+  type = list(string)
+}
+
+variable "bucket_name" {
+  type = string
+}
+
+variable "secret_prefix" {
+  type    = string
+  default = "strava"
+}
+
+variable "bootstrap_secrets" {
+  type    = bool
+  default = false
+}
+
+variable "secret_values" {
+  type = object({
+    client_id     = string
+    client_secret = string
+    auth_state    = string
+  })
+  sensitive = true
+  default   = null
+
+  validation {
+    condition     = var.bootstrap_secrets == false || var.secret_values != null
+    error_message = "When bootstrap_secrets is true, you must provide secret_values."
+  }
+}
+
+variable "container_image" {
+  type    = string
+  default = ""
+}
+
+variable "task_cpu" {
+  type    = number
+  default = 256
+}
+
+variable "task_memory" {
+  type    = number
+  default = 512
+}
+
+variable "log_retention_days" {
+  type    = number
+  default = 14
+}
+
+variable "pipeline_query_engine" {
+  type    = string
+  default = "none"
+}
+
+variable "app_env" {
+  type    = map(string)
+  default = {}
+}
+
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
+
+variable "enable_schedule" {
+  type    = bool
+  default = false
+}
+
+variable "schedule_expression" {
+  type    = string
+  default = "rate(1 hour)"
+}
+
+variable "assign_public_ip" {
+  type    = string
+  default = "ENABLED"
+
+  validation {
+    condition     = contains(["ENABLED", "DISABLED"], var.assign_public_ip)
+    error_message = "assign_public_ip must be ENABLED or DISABLED."
+  }
+}

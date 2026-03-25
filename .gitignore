@@ -4,3 +4,8 @@ venv/
 .venv/
 *.py[cod]
 *$py.class
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.exe
