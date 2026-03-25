@@ -3,15 +3,16 @@ import requests
 import logging
 import json
 
-from app.gcp_secrets import get_secret, update_refresh_token_if_changed
+from app.aws_secrets import get_secret, update_refresh_token_if_changed
 
 
-PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
-if not PROJECT_ID:
-    raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
+SECRET_PREFIX = os.getenv("SECRET_PREFIX", "strava")
+CLIENT_ID_SECRET = os.getenv("STRAVA_CLIENT_ID_SECRET", f"{SECRET_PREFIX}-client-id")
+CLIENT_SECRET_SECRET = os.getenv("STRAVA_CLIENT_SECRET_SECRET", f"{SECRET_PREFIX}-client-secret")
+AUTH_STATE_SECRET = os.getenv("STRAVA_AUTH_STATE_SECRET", f"{SECRET_PREFIX}-auth-state")
 
-CLIENT_ID = get_secret("strava-client-id", PROJECT_ID)
-CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
+CLIENT_ID = get_secret(CLIENT_ID_SECRET)
+CLIENT_SECRET = get_secret(CLIENT_SECRET_SECRET)
 
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 
@@ -19,7 +20,7 @@ logger = logging.getLogger("strava_pipeline")
 
 
 def get_access_token() -> str:
-    refresh_state = get_secret("strava-auth-state", PROJECT_ID)
+    refresh_state = get_secret(AUTH_STATE_SECRET)
     refresh_token = json.loads(refresh_state)["refresh_token"]
 
     response = requests.post(
@@ -38,8 +39,7 @@ def get_access_token() -> str:
 
     if "refresh_token" in data:
         updated = update_refresh_token_if_changed(
-            secret_name="strava-auth-state",
-            project_id=PROJECT_ID,
+            secret_name=AUTH_STATE_SECRET,
             new_refresh_token=data["refresh_token"]
         )
 

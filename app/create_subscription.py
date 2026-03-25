@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 from dotenv import load_dotenv
-from app.gcp_secrets import get_secret
+from app.aws_secrets import get_secret
 
 load_dotenv()
 
@@ -13,9 +13,9 @@ logging.basicConfig(
 
 logger = logging.getLogger("strava_pipeline")
 
-PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
-if not PROJECT_ID:
-    raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
+SECRET_PREFIX = os.getenv("SECRET_PREFIX", "strava")
+CLIENT_ID_SECRET = os.getenv("STRAVA_CLIENT_ID_SECRET", f"{SECRET_PREFIX}-client-id")
+CLIENT_SECRET_SECRET = os.getenv("STRAVA_CLIENT_SECRET_SECRET", f"{SECRET_PREFIX}-client-secret")
 
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
 if not VERIFY_TOKEN:
@@ -25,8 +25,8 @@ CALLBACK_URL = os.getenv("WEBHOOK_CALLBACK_URL")
 if not CALLBACK_URL:
     raise RuntimeError("Missing env var: WEBHOOK_CALLBACK_URL")
 
-CLIENT_ID = get_secret("strava-client-id", PROJECT_ID)
-CLIENT_SECRET = get_secret("strava-client-secret", PROJECT_ID)
+CLIENT_ID = get_secret(CLIENT_ID_SECRET)
+CLIENT_SECRET = get_secret(CLIENT_SECRET_SECRET)
 
 BASE_URL = "https://www.strava.com/api/v3/push_subscriptions"
 

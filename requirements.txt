@@ -2,7 +2,4 @@ requests>=2.31.0
 flask>=3.0.0
 flask-limiter>=3.5.0
 python-dotenv
-google-cloud-secret-manager
-google-cloud-storage
-google-cloud-run
-google-cloud-bigquery
+boto3>=1.34.0

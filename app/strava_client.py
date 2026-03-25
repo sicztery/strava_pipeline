@@ -256,10 +256,10 @@ def run_pipeline():
         )
 
         # ======================
-        # 9️⃣ EXECUTE BQ PIPELINE
+        # 9️⃣ EXECUTE PIPELINE QUERY
         # ======================
-        # IMPORTANT: This happens AFTER all GCS writes (raw + staging) are complete
-        # to ensure BigQuery external table has synced the new data
+        # IMPORTANT: This happens AFTER all S3 writes (raw + staging) are complete
+        # to ensure downstream tables have the new data
 
         execute_pipeline_query(run_id)
 

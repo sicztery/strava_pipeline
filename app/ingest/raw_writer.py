@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from typing import List, Dict
 
-from google.cloud import storage
+import boto3
 
 # ======================
 # CONFIG
@@ -33,13 +33,14 @@ def write_raw(
     if not activities:
         return
 
-    client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
+    region = os.getenv("AWS_REGION")
+    if region:
+        client = boto3.client("s3", region_name=region)
+    else:
+        client = boto3.client("s3")
 
     today = datetime.now(timezone.utc).strftime("%Y/%m/%d")
     blob_path = f"raw/strava/{today}/activities_{run_id}.jsonl"
-
-    blob = bucket.blob(blob_path)
 
     lines = []
     ingested_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -55,9 +56,11 @@ def write_raw(
 
     payload = "\n".join(lines) + "\n"
 
-    blob.upload_from_string(
-        payload,
-        content_type="application/json"
+    client.put_object(
+        Bucket=BUCKET_NAME,
+        Key=blob_path,
+        Body=payload.encode("utf-8"),
+        ContentType="application/json"
     )
 
 

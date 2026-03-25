@@ -1,4 +1,5 @@
-INSERT INTO `${PROJECT_ID}.${DATASET}.strava_main` (
+-- Athena / Trino SQL
+INSERT INTO "${DATABASE}.strava_main" (
   activity_id,
   activity_name,
   activity_type,
@@ -33,40 +34,44 @@ INSERT INTO `${PROJECT_ID}.${DATASET}.strava_main` (
   ingest_ts
 )
 SELECT
-  SAFE_CAST(activity_id AS INT64),
-  name,
-  sport_type,
-  SAFE_CAST(start_date_utc AS TIMESTAMP),
-  SAFE_CAST(start_date_local AS TIMESTAMP),
-  SAFE_CAST(utc_offset AS FLOAT64),
+  try_cast(activity_id AS bigint) AS activity_id,
+  name AS activity_name,
+  sport_type AS activity_type,
+  cast(try(from_iso8601_timestamp(start_date_utc)) AS timestamp) AS start_date_utc,
+  cast(try(from_iso8601_timestamp(start_date_local)) AS timestamp) AS start_date_local,
+  try_cast(utc_offset AS double) AS utc_offset,
   timezone,
-  SAFE_CAST(distance_m AS FLOAT64),
-  SAFE_CAST(moving_time_s AS INT64),
-  SAFE_CAST(elapsed_time_s AS INT64),
-  SAFE_CAST(elevation_gain_m AS FLOAT64),
-  SAFE_CAST(average_speed_kmh AS INT64),
-  SAFE_CAST(max_speed_kmh AS INT64),
-  CAST(SAFE_CAST(average_hr AS FLOAT64) AS INT64),
-  SAFE_CAST(max_hr AS INT64),
-  SAFE_CAST(has_heartrate AS BOOL),
-  SAFE_CAST(average_cadence AS INT64),
-  SAFE_CAST(average_watts AS INT64),
-  max_watts,
-  SAFE_CAST(weighted_average_watts AS INT64),
-  SAFE_CAST(kilojoules AS INT64),                
-  SAFE_CAST(suffer_score AS INT64),
+  try_cast(distance_m AS double) AS distance,
+  try_cast(moving_time_s AS bigint) AS moving_time,
+  try_cast(elapsed_time_s AS bigint) AS elapsed_time,
+  try_cast(elevation_gain_m AS double) AS elevation_gain,
+  try_cast(average_speed_kmh AS double) AS average_speed,
+  try_cast(max_speed_kmh AS double) AS max_speed,
+  cast(try_cast(average_hr AS double) AS bigint) AS average_heart_rate,
+  try_cast(max_hr AS bigint) AS max_heart_rate,
+  try_cast(has_heartrate AS boolean) AS has_heartrate,
+  try_cast(average_cadence AS bigint) AS average_cadence,
+  try_cast(average_watts AS bigint) AS average_watts,
+  try_cast(max_watts AS bigint) AS max_watts,
+  try_cast(weighted_average_watts AS bigint) AS weighted_average_watts,
+  try_cast(kilojoules AS bigint) AS kilojoules,
+  try_cast(suffer_score AS bigint) AS suffer_score,
   device_name,
   gear_id,
-  SAFE_CAST(start_lat AS FLOAT64),                        
-  SAFE_CAST(start_lng AS FLOAT64),                         
-  SAFE_CAST(end_lat AS FLOAT64),                            
-  SAFE_CAST(end_lng AS FLOAT64),
-  SAFE_CAST(is_private AS BOOL),
-  SAFE_CAST(is_commute AS BOOL),                            
-  SAFE_CAST(is_manual AS BOOL),   
-  COALESCE(SAFE_CAST(ingest_ts AS TIMESTAMP), CURRENT_TIMESTAMP())
-FROM `${PROJECT_ID}.${DATASET}.strava_raw_ext`
--- Only insert NEW activities that aren't already in `main` (deduplication)
-WHERE SAFE_CAST(activity_id AS INT64) NOT IN (
-  SELECT activity_id FROM `${PROJECT_ID}.${DATASET}.strava_main`
+  try_cast(start_lat AS double) AS start_lat,
+  try_cast(start_lng AS double) AS start_lng,
+  try_cast(end_lat AS double) AS end_lat,
+  try_cast(end_lng AS double) AS end_lng,
+  try_cast(is_private AS boolean) AS is_private,
+  try_cast(is_commute AS boolean) AS commute,
+  try_cast(is_manual AS boolean) AS is_manual,
+  coalesce(
+    cast(try(from_iso8601_timestamp(ingest_ts)) AS timestamp),
+    current_timestamp
+  ) AS ingest_ts
+FROM "${DATABASE}.strava_raw_ext" r
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM "${DATABASE}.strava_main" m
+  WHERE m.activity_id = try_cast(r.activity_id AS bigint)
 );

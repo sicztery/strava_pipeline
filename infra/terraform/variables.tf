@@ -67,6 +67,46 @@ variable "log_retention_days" {
 variable "pipeline_query_engine" {
   type    = string
   default = "none"
+
+  validation {
+    condition     = contains(["none", "athena"], var.pipeline_query_engine)
+    error_message = "pipeline_query_engine must be \"none\" or \"athena\"."
+  }
+}
+
+variable "athena_database" {
+  type    = string
+  default = ""
+
+  validation {
+    condition     = var.pipeline_query_engine != "athena" || var.athena_database != ""
+    error_message = "athena_database is required when pipeline_query_engine is athena."
+  }
+}
+
+variable "athena_output_s3" {
+  type    = string
+  default = ""
+
+  validation {
+    condition     = var.pipeline_query_engine != "athena" || var.athena_output_s3 != ""
+    error_message = "athena_output_s3 is required when pipeline_query_engine is athena."
+  }
+}
+
+variable "athena_workgroup" {
+  type    = string
+  default = ""
+}
+
+variable "athena_timeout_seconds" {
+  type    = number
+  default = 300
+}
+
+variable "pipeline_sql_path" {
+  type    = string
+  default = ""
 }
 
 variable "app_env" {

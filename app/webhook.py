@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
-from google.cloud import run_v2
+import boto3
 import os
 import logging
 import time
@@ -24,19 +24,20 @@ logger = logging.getLogger("strava_pipeline")
 
 load_dotenv()
 
-PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
-if not PROJECT_ID:
-    raise RuntimeError("Missing env var: STRAVA_GCP_PROJECT")
-
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
-REGION = os.getenv("STRAVA_GCP_REGION", "europe-west1")
-JOB_NAME = os.getenv("STRAVA_WORKER_JOB")
+AWS_REGION = os.getenv("AWS_REGION")
+ECS_CLUSTER = os.getenv("ECS_CLUSTER")
+ECS_TASK_DEFINITION = os.getenv("ECS_TASK_DEFINITION")
+ECS_SUBNETS = os.getenv("ECS_SUBNETS")
+ECS_SECURITY_GROUPS = os.getenv("ECS_SECURITY_GROUPS")
+ECS_ASSIGN_PUBLIC_IP = os.getenv("ECS_ASSIGN_PUBLIC_IP", "ENABLED")
+ECS_LAUNCH_TYPE = os.getenv("ECS_LAUNCH_TYPE", "FARGATE")
 WEBHOOK_COOLDOWN_SECONDS = int(os.getenv("WEBHOOK_COOLDOWN_SECONDS", "180"))
 
 last_job_trigger = 0
 
 logger.info(
-    f"Webhook service starting - Cloud Run trigger enabled for job: {JOB_NAME}"
+    "Webhook service starting - ECS trigger enabled"
 )
 
 # ======================
@@ -145,18 +146,46 @@ def handle_event():
     
     try:
         last_job_trigger = now
-        
-        client = run_v2.JobsClient()
-        job_path = f"projects/{PROJECT_ID}/locations/{REGION}/jobs/{JOB_NAME}"
-        
-        client.run_job(name=job_path)
-        
+
+        if not ECS_CLUSTER:
+            raise RuntimeError("Missing env var: ECS_CLUSTER")
+        if not ECS_TASK_DEFINITION:
+            raise RuntimeError("Missing env var: ECS_TASK_DEFINITION")
+        if not ECS_SUBNETS:
+            raise RuntimeError("Missing env var: ECS_SUBNETS")
+        if not ECS_SECURITY_GROUPS:
+            raise RuntimeError("Missing env var: ECS_SECURITY_GROUPS")
+
+        subnets = [s.strip() for s in ECS_SUBNETS.split(",") if s.strip()]
+        security_groups = [
+            s.strip() for s in ECS_SECURITY_GROUPS.split(",") if s.strip()
+        ]
+
+        if AWS_REGION:
+            client = boto3.client("ecs", region_name=AWS_REGION)
+        else:
+            client = boto3.client("ecs")
+
+        client.run_task(
+            cluster=ECS_CLUSTER,
+            taskDefinition=ECS_TASK_DEFINITION,
+            launchType=ECS_LAUNCH_TYPE,
+            count=1,
+            networkConfiguration={
+                "awsvpcConfiguration": {
+                    "subnets": subnets,
+                    "securityGroups": security_groups,
+                    "assignPublicIp": ECS_ASSIGN_PUBLIC_IP,
+                }
+            },
+        )
+
         logger.info(
-            f"Cloud Run job triggered for activity_id={object_id}"
+            f"ECS task triggered for activity_id={object_id}"
         )
     except Exception as e:
         logger.error(
-            f"Failed to trigger Cloud Run job: {type(e).__name__}",
+            f"Failed to trigger ECS task: {type(e).__name__}",
             exc_info=True
         )
         # Return 200 to prevent Strava retries

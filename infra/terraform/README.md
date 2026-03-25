@@ -28,6 +28,8 @@ bucket_name       = "my-unique-bucket-name"
 container_image   = "" # defaults to the ECR repo with :latest
 
 enable_schedule   = false
+pipeline_query_engine = "none"
+secret_prefix     = "strava"
 ```
 
 2. Initialize and apply:
@@ -102,6 +104,18 @@ secret_values = {
 - Build and push the Docker image to ECR.
 - Update `container_image` if you use a tag other than `latest`.
 - Run the task manually or enable the scheduler.
+
+## Athena (optional)
+
+If you want Athena query execution, set:
+
+```hcl
+pipeline_query_engine = "athena"
+athena_database       = "your_database"
+athena_output_s3      = "s3://your-bucket/athena-output/"
+athena_workgroup      = "" # optional
+pipeline_sql_path     = "" # optional
+```
 
 ## Notes
 

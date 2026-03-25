@@ -1,72 +1,96 @@
 import os
 import logging
-from google.cloud import bigquery
+import time
+import boto3
 
 logger = logging.getLogger("strava_pipeline")
 
 
+def _athena_client():
+    region = os.getenv("AWS_REGION")
+    if region:
+        return boto3.client("athena", region_name=region)
+    return boto3.client("athena")
+
+
 def execute_pipeline_query(run_id: str) -> None:
     """
-    Execute the BigQuery pipeline query that transforms raw data into strava_main.
-    
-    Args:
-        run_id: Pipeline run ID for logging
-    """
-    
-    # ======================
-    # CONFIG
-    # ======================
+    Execute the pipeline query using AWS Athena.
 
-    PROJECT_ID = os.getenv("STRAVA_GCP_PROJECT")
-    DATASET = os.getenv("BQ_DATASET")
-    BQ_LOCATION = os.getenv("BQ_LOCATION", "europe-west1")
-    
-    logger.info(f"{run_id} | BQ_PIPELINE | START | Executing BigQuery pipeline query")
-    
-    try:
-        # Load and execute pipeline query
-        bq_client = bigquery.Client(project=PROJECT_ID)
-        
-        # Get absolute path to SQL file
+    Set PIPELINE_QUERY_ENGINE=none to skip.
+    """
+
+    engine = os.getenv("PIPELINE_QUERY_ENGINE", "none").lower()
+    if engine in ("none", "off", "false", "0"):
+        logger.info(f"{run_id} | PIPELINE_QUERY | SKIP | Engine is disabled")
+        return
+
+    if engine != "athena":
+        raise RuntimeError(f"Unsupported PIPELINE_QUERY_ENGINE: {engine}")
+
+    database = os.getenv("ATHENA_DATABASE")
+    output_location = os.getenv("ATHENA_OUTPUT_S3")
+    workgroup = os.getenv("ATHENA_WORKGROUP")
+    timeout_seconds = int(os.getenv("ATHENA_TIMEOUT_SECONDS", "300"))
+
+    if not database:
+        raise RuntimeError("Missing env var: ATHENA_DATABASE")
+    if not output_location:
+        raise RuntimeError("Missing env var: ATHENA_OUTPUT_S3")
+
+    sql_path = os.getenv("PIPELINE_SQL_PATH")
+    if not sql_path:
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        # app/staging -> app -> strava_pipeline
         base_dir = os.path.dirname(os.path.dirname(script_dir))
         sql_path = os.path.join(base_dir, "sql/pipeline_query.sql")
-        
-        # Verify SQL file exists
-        if not os.path.exists(sql_path):
-            raise FileNotFoundError(f"SQL file not found: {sql_path}")
-        
-        # Read and substitute variables
-        with open(sql_path, "r") as f:
-            sql_query = f.read()
-        
-        logger.info(f"{run_id} | BQ_PIPELINE | SQL_LOADED | Query size: {len(sql_query)} bytes")
-        
-        sql_query = sql_query.replace("${PROJECT_ID}", PROJECT_ID)
-        sql_query = sql_query.replace("${DATASET}", DATASET)
-        
-        # Execute query
-        job_config = bigquery.QueryJobConfig(use_legacy_sql=False)
-        query_job = bq_client.query(sql_query, job_config=job_config, location=BQ_LOCATION)
-        
-        logger.info(f"{run_id} | BQ_PIPELINE | JOB_SUBMITTED | Job ID: {query_job.job_id}")
-        
-        # Wait for query to complete with 5-minute timeout
-        query_result = query_job.result(timeout=300)
-        
-        logger.info(
-            f"{run_id} | BQ_PIPELINE | OK | "
-            f"BigQuery pipeline executed successfully | "
-            f"job_id={query_job.job_id} | rows_affected={query_result.total_rows}"
+
+    if not os.path.exists(sql_path):
+        raise FileNotFoundError(f"SQL file not found: {sql_path}")
+
+    with open(sql_path, "r") as f:
+        sql_query = f.read()
+
+    sql_query = sql_query.replace("${DATABASE}", database)
+    sql_query = sql_query.replace("${DATASET}", database)
+
+    logger.info(f"{run_id} | PIPELINE_QUERY | START | Athena query execution")
+
+    client = _athena_client()
+    params = {
+        "QueryString": sql_query,
+        "QueryExecutionContext": {"Database": database},
+        "ResultConfiguration": {"OutputLocation": output_location},
+    }
+    if workgroup:
+        params["WorkGroup"] = workgroup
+
+    response = client.start_query_execution(**params)
+    query_execution_id = response["QueryExecutionId"]
+
+    logger.info(
+        f"{run_id} | PIPELINE_QUERY | SUBMITTED | "
+        f"query_execution_id={query_execution_id}"
+    )
+
+    deadline = time.time() + timeout_seconds
+    while True:
+        result = client.get_query_execution(
+            QueryExecutionId=query_execution_id
         )
-        
-    except FileNotFoundError as e:
-        logger.error(f"{run_id} | BQ_PIPELINE | FAIL | SQL file not found: {e}")
-        raise
-    except Exception as e:
-        logger.error(
-            f"{run_id} | BQ_PIPELINE | FAIL | Query execution failed: {str(e)}",
-            exc_info=True
+        state = result["QueryExecution"]["Status"]["State"]
+        if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            break
+        if time.time() > deadline:
+            raise TimeoutError("Athena query timed out")
+        time.sleep(2)
+
+    if state != "SUCCEEDED":
+        reason = result["QueryExecution"]["Status"].get("StateChangeReason", "")
+        raise RuntimeError(
+            f"Athena query failed: state={state} reason={reason}"
         )
-        raise
+
+    logger.info(
+        f"{run_id} | PIPELINE_QUERY | OK | "
+        f"query_execution_id={query_execution_id}"
+    )
