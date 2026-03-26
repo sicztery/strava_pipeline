@@ -28,7 +28,10 @@ resource "aws_iam_role" "worker" {
 
 data "aws_iam_policy_document" "worker" {
   statement {
-    actions = ["s3:ListBucket"]
+    actions = [
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
+    ]
     resources = [
       aws_s3_bucket.data.arn
     ]
@@ -61,6 +64,35 @@ data "aws_iam_policy_document" "worker" {
     resources = [
       aws_secretsmanager_secret.auth_state.arn
     ]
+  }
+
+  dynamic "statement" {
+    for_each = var.pipeline_query_engine == "athena" ? [1] : []
+    content {
+      actions = [
+        "athena:StartQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults",
+        "athena:StopQueryExecution",
+        "athena:GetWorkGroup"
+      ]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.pipeline_query_engine == "athena" ? [1] : []
+    content {
+      actions = [
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:GetPartition",
+        "glue:GetPartitions"
+      ]
+      resources = ["*"]
+    }
   }
 }
 

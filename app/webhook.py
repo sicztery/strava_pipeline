@@ -133,7 +133,7 @@ def handle_event():
         f"✓ Valid Strava webhook: activity_id={object_id}"
     )
 
-    # ===== TRIGGER: Cloud Run Job with Cooldown =====
+    # ===== TRIGGER: Job with Cooldown =====
 
     now = time.time()
     if now - last_job_trigger < WEBHOOK_COOLDOWN_SECONDS:

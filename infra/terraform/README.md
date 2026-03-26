@@ -117,6 +117,10 @@ athena_workgroup      = "" # optional
 pipeline_sql_path     = "" # optional
 ```
 
+Terraform will also create a Glue catalog database and two external tables:
+- `strava_raw_ext` mapped to `s3://<bucket>/staging/strava/` (JSONL)
+- `strava_main` mapped to `s3://<bucket>/main/` (Parquet)
+
 ## Notes
 
 - This setup assumes public subnets with Internet Gateway access.
