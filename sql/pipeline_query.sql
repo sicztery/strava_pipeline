@@ -1,5 +1,5 @@
 -- Athena / Trino SQL
-INSERT INTO "${DATABASE}.strava_main" (
+INSERT INTO "${DATABASE}"."strava_main" (
   activity_id,
   activity_name,
   activity_type,
@@ -69,9 +69,9 @@ SELECT
     cast(try(from_iso8601_timestamp(ingest_ts)) AS timestamp),
     current_timestamp
   ) AS ingest_ts
-FROM "${DATABASE}.strava_raw_ext" r
+FROM "${DATABASE}"."strava_raw_ext" r
 WHERE NOT EXISTS (
   SELECT 1
-  FROM "${DATABASE}.strava_main" m
+  FROM "${DATABASE}"."strava_main" m
   WHERE m.activity_id = try_cast(r.activity_id AS bigint)
 );
