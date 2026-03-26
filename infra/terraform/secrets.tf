@@ -13,6 +13,11 @@ resource "aws_secretsmanager_secret" "auth_state" {
   tags = local.tags
 }
 
+resource "aws_secretsmanager_secret" "webhook_verify_token" {
+  name = local.secret_names.webhook_verify_token
+  tags = local.tags
+}
+
 resource "aws_secretsmanager_secret_version" "client_id" {
   count         = var.bootstrap_secrets ? 1 : 0
   secret_id     = aws_secretsmanager_secret.client_id.id

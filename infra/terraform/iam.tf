@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_policy_document" "ecs_task_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -55,7 +57,8 @@ data "aws_iam_policy_document" "worker" {
     resources = [
       aws_secretsmanager_secret.client_id.arn,
       aws_secretsmanager_secret.client_secret.arn,
-      aws_secretsmanager_secret.auth_state.arn
+      aws_secretsmanager_secret.auth_state.arn,
+      aws_secretsmanager_secret.webhook_verify_token.arn
     ]
   }
 
@@ -93,6 +96,30 @@ data "aws_iam_policy_document" "worker" {
       ]
       resources = ["*"]
     }
+  }
+
+  statement {
+    actions = [
+      "ecs:RunTask"
+    ]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${aws_ecs_task_definition.worker.family}:*"
+    ]
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
+  }
+
+  statement {
+    actions = [
+      "iam:PassRole"
+    ]
+    resources = [
+      aws_iam_role.ecs_execution.arn,
+      aws_iam_role.worker.arn
+    ]
   }
 }
 

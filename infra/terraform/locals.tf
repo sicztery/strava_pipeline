@@ -12,6 +12,7 @@ locals {
     client_id     = "${var.secret_prefix}-client-id"
     client_secret = "${var.secret_prefix}-client-secret"
     auth_state    = "${var.secret_prefix}-auth-state"
+    webhook_verify_token = "${var.secret_prefix}-webhook-verify-token"
   }
 
   container_image = var.container_image != "" ? var.container_image : "${aws_ecr_repository.app.repository_url}:latest"
@@ -33,5 +34,33 @@ locals {
     },
     { for k, v in local.athena_env : k => v if v != "" },
     var.app_env
+  )
+
+  webhook_env = merge(
+    local.container_env,
+    {
+      ECS_CLUSTER              = aws_ecs_cluster.main.name
+      ECS_TASK_DEFINITION      = aws_ecs_task_definition.worker.arn
+      ECS_SUBNETS              = join(",", var.public_subnet_ids)
+      ECS_SECURITY_GROUPS      = aws_security_group.worker.id
+      ECS_ASSIGN_PUBLIC_IP     = var.assign_public_ip
+      ECS_LAUNCH_TYPE          = "FARGATE"
+      WEBHOOK_COOLDOWN_SECONDS = tostring(var.webhook_cooldown_seconds)
+      WEBHOOK_VERIFY_TOKEN_SECRET = local.secret_names.webhook_verify_token
+      PORT                     = tostring(var.webhook_container_port)
+    },
+    { for k, v in {
+        WEBHOOK_CALLBACK_URL = var.webhook_callback_url
+      } : k => v if v != "" }
+  )
+
+  create_subscription_env = merge(
+    local.container_env,
+    {
+      WEBHOOK_VERIFY_TOKEN_SECRET = local.secret_names.webhook_verify_token
+    },
+    { for k, v in {
+        WEBHOOK_CALLBACK_URL = var.webhook_callback_url
+      } : k => v if v != "" }
   )
 }

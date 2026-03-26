@@ -22,6 +22,10 @@ CLIENT_SECRET_SECRET = os.getenv(
     "STRAVA_CLIENT_SECRET_SECRET",
     f"{SECRET_PREFIX}-client-secret"
 )
+WEBHOOK_VERIFY_TOKEN_SECRET = os.getenv(
+    "WEBHOOK_VERIFY_TOKEN_SECRET",
+    f"{SECRET_PREFIX}-webhook-verify-token"
+)
 
 BASE_URL = "https://www.strava.com/api/v3/push_subscriptions"
 
@@ -29,7 +33,12 @@ BASE_URL = "https://www.strava.com/api/v3/push_subscriptions"
 def _load_config():
     verify_token = os.getenv("WEBHOOK_VERIFY_TOKEN")
     if not verify_token:
-        raise RuntimeError("Missing env var: WEBHOOK_VERIFY_TOKEN")
+        try:
+            verify_token = get_secret(WEBHOOK_VERIFY_TOKEN_SECRET)
+        except Exception as e:
+            raise RuntimeError(
+                "Missing env var: WEBHOOK_VERIFY_TOKEN"
+            ) from e
 
     callback_url = os.getenv("WEBHOOK_CALLBACK_URL")
     if not callback_url:

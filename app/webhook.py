@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
+from app.aws_secrets import get_secret
 import boto3
 import os
 import logging
@@ -24,7 +25,11 @@ logger = logging.getLogger("strava_pipeline")
 
 load_dotenv()
 
-VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
+SECRET_PREFIX = os.getenv("SECRET_PREFIX", "strava")
+WEBHOOK_VERIFY_TOKEN_SECRET = os.getenv(
+    "WEBHOOK_VERIFY_TOKEN_SECRET",
+    f"{SECRET_PREFIX}-webhook-verify-token"
+)
 AWS_REGION = os.getenv("AWS_REGION")
 ECS_CLUSTER = os.getenv("ECS_CLUSTER")
 ECS_TASK_DEFINITION = os.getenv("ECS_TASK_DEFINITION")
@@ -62,7 +67,21 @@ limiter = Limiter(
 # 1. GET endpoint token verification (verify_token in callback URL validation)
 # 2. Rate limiting on POST endpoint (30 requests/minute per IP, 200/day global)
 # 3. Strict payload validation (aspect_type, object_type, object_id)
-# 4. HTTPS only (enforced by Cloud Run)
+# 4. HTTPS only (enforced by ALB if configured)
+
+
+def _get_verify_token() -> str | None:
+    token = os.getenv("WEBHOOK_VERIFY_TOKEN")
+    if token:
+        return token
+    try:
+        return get_secret(WEBHOOK_VERIFY_TOKEN_SECRET)
+    except Exception:
+        logger.warning(
+            "Webhook verify token is missing and could not be "
+            "loaded from Secrets Manager"
+        )
+        return None
 
 # ======================
 # VERIFICATION
@@ -75,15 +94,26 @@ def handle_verification():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
+    verify_token = _get_verify_token()
 
     logger.debug("Webhook verification request received")
 
-    if mode == "subscribe" and token == VERIFY_TOKEN and challenge:
+    if not verify_token:
+        return jsonify({"error": "Server misconfigured"}), 500
+
+    if mode == "subscribe" and token == verify_token and challenge:
         logger.info("Webhook verification successful")
         return jsonify({"hub.challenge": challenge}), 200
 
-    logger.warning(f"Verification failed - mode: {mode}, token_match: {token == VERIFY_TOKEN}")
+    logger.warning(
+        f"Verification failed - mode: {mode}, token_match: {token == verify_token}"
+    )
     return jsonify({"error": "Forbidden"}), 403
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return jsonify({"status": "ok"}), 200
 
 
 # ======================

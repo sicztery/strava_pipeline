@@ -18,6 +18,26 @@ output "worker_security_group_id" {
   value = aws_security_group.worker.id
 }
 
+output "webhook_service_name" {
+  value       = var.enable_webhook_service ? aws_ecs_service.webhook[0].name : null
+  description = "Only set when enable_webhook_service is true."
+}
+
+output "webhook_task_definition_arn" {
+  value       = var.enable_webhook_service ? aws_ecs_task_definition.webhook[0].arn : null
+  description = "Only set when enable_webhook_service is true."
+}
+
+output "webhook_alb_dns_name" {
+  value       = var.enable_webhook_service ? aws_lb.webhook[0].dns_name : null
+  description = "Public DNS name for the webhook ALB."
+}
+
+output "create_subscription_task_definition_arn" {
+  value       = aws_ecs_task_definition.create_subscription.arn
+  description = "Task definition for manual Strava webhook subscription creation."
+}
+
 output "scheduler_role_arn" {
   value       = var.enable_schedule ? aws_iam_role.scheduler[0].arn : null
   description = "Only set when enable_schedule is true."

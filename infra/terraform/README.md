@@ -105,6 +105,35 @@ secret_values = {
 - Update `container_image` if you use a tag other than `latest`.
 - Run the task manually or enable the scheduler.
 
+## Webhook service (Strava -> ECS trigger)
+
+This config can also run a public webhook service that triggers the worker task.
+By default it creates:
+- An internet-facing ALB
+- An ECS service running `python -m app.main webhook`
+
+Set these variables as needed:
+
+```hcl
+enable_webhook_service = true
+webhook_callback_url   = "" # optional, for create_subscription task
+webhook_certificate_arn = "" # optional, HTTPS listener if provided
+```
+
+After `apply`, check `webhook_alb_dns_name` output and point your Strava callback URL to:
+
+```
+http://<alb-dns-name>/webhook
+```
+
+If you enable HTTPS with an ACM cert, use:
+
+```
+https://<your-domain>/webhook
+```
+
+You must also set the Secrets Manager value for `${secret_prefix}-webhook-verify-token`.
+
 ## Athena (optional)
 
 If you want Athena query execution, set:
