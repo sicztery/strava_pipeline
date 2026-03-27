@@ -8,4 +8,4 @@ venv/
 *.tfstate
 *.tfstate.*
 *.tfvars
-.exe
+*.exe

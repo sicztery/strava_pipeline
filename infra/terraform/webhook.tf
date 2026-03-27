@@ -177,7 +177,7 @@ resource "aws_ecs_service" "webhook" {
   network_configuration {
     subnets          = var.public_subnet_ids
     security_groups  = [aws_security_group.webhook[0].id]
-    assign_public_ip = var.assign_public_ip
+    assign_public_ip = var.assign_public_ip == "ENABLED"
   }
 
   load_balancer {
