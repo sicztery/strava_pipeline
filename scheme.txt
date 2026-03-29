@@ -1,146 +1,149 @@
-#####                                                          #####
-##################### STRAVA ELT PIPELINE 2.0 ######################.,
-#####                                                          #####  ',
-                                                                        ,
-                                                                         ,
+STRAVA PIPELINE - REPOSITORY MAP AND AWS FLOW
+=============================================
 
-1. strava_pipeline: 
- │
- ├── app/                                                                  ,
- │   │
- │   ├── main.py                   # entry point
- │   ├── webhook.py                # Strava webhook receiver & processor
- │   ├── strava_client.py          # orchestrator (main, scheduled runs)
- │   ├── create_subscription.py    # script to create webhook subscriptions
- │   ├── gcp_secrets.py            # secrets handler 
- │   │
- │   ├── auth/                     
- │   │   │
- │   │   └── auth_client.py        # OAuth 2.0 authentication
- │   │                               token refresh, exchange, validation
- │   │                                                                      , 
- │   ├── state/                    
- │   │   │
- │   │   └── state_manager.py      # load/save last_seen (timestamp + id)
- │   │                               json handling
- │   ├── api/                      
- │   │   │
- │   │   └── strava_api.py         # Strava HTTP requests
- │   │
- │   ├── ingest/                   
- │   │   │
- │   │   ├── filter.py             # if-there's-new-activity logic
- │   │   └── raw_writer.py         # append-only RAW saving (data lake)
- │   │
- │   └── staging/                  
- │       │
- │       ├── transformer.py        # initial data cleaning and transforming
- │       ├── stage_writer.py       # write transformed data to staging
- │       └── query_trigger.py      # execute SQL transformations
- │
- ├── sql/                          
- │   │ 
- │   ├── pipeline_query.sql        # records data do main table
- │   └── pipeline_dash.sql         # analitical view for BI tools
- │   
- │   
- │   
- │
- ├── cloudbuild.yaml               
- ├── Dockerfile                    
- ├── README.md                     
- ├── requirements.txt              # Python dependencies
- ├── scheme.txt                    # this file
- └── LICENSE                                                     
+1. Repository layout
+--------------------
 
-                                                                             ,
+strava_pipeline/
+|-- app/
+|   |-- main.py                -> Single container entrypoint; chooses worker, webhook, or create_sub mode.
+|   |-- strava_client.py       -> Main worker orchestrator; runs auth, fetch, filtering, S3 writes, state update and Athena SQL.
+|   |-- webhook.py             -> Lightweight Flask service; verifies Strava webhook calls and starts the ECS worker task.
+|   |-- create_subscription.py -> One-time admin task; removes old Strava subscriptions and creates the current webhook subscription.
+|   |-- aws_secrets.py         -> Shared Secrets Manager helper; reads secrets and updates the rotated refresh token when needed.
+|   |-- api/
+|   |   `-- strava_api.py      -> Calls the Strava activities API and returns raw activity payloads.
+|   |-- auth/
+|   |   `-- auth_client.py     -> Exchanges the stored refresh token for an access token and persists a new refresh token if Strava rotates it.
+|   |-- ingest/
+|   |   |-- filter.py          -> Keeps only activities newer than the saved checkpoint and calculates the next checkpoint.
+|   |   `-- raw_writer.py      -> Writes append-only raw activity envelopes to S3 as JSONL files.
+|   |-- staging/
+|   |   |-- transformer.py     -> Flattens nested Strava JSON into a cleaner analytics-friendly record.
+|   |   |-- stage_writer.py    -> Saves transformed activity rows to the S3 staging area as JSONL.
+|   |   `-- query_trigger.py   -> Runs the Athena SQL step when PIPELINE_QUERY_ENGINE is enabled.
+|   `-- state/
+|       `-- state_manager.py   -> Loads and saves pipeline state in S3 so the worker knows where to resume.
+|-- sql/
+|   `-- pipeline_query.sql     -> Inserts new staged rows into the Athena main table.
+|-- infra/
+|   `-- terraform/             -> Provisions the AWS stack used by the pipeline.
+|-- SETUP.md                   -> Setup and operating guide for the current AWS deployment.
+|-- README.md                  -> High-level project overview.
+`-- scheme.txt                 -> This repository and architecture map.
 
 
-2. Cloud Platform Deploy scheme (full ELT pipeline):
+2. Runtime modes
+----------------
 
-          ┌─────────────────────────────────────────────────GCP PROJECT────────────────────────────────────────┐
-          │                                                                                                    │
-     ┌────┴─────────┐                           ┌──────────────┐                                               │
-     │  Scheduler   │                           │   Webhooks   │        ┌────────────────────┐                 │
-     │  (CRON 24h)  │                           │ (Real-time)  │        │ Secret Manager     │                 │
-     │              │                           │              │        │ - STRAVA_CLIENT    │                 │
-     └────┬─────────┘                           └───┬──────────┘        │ - STRAVA_SECRET    │                 │
-          │                                         │                   │ - REFRESH_TOKEN    │                 │
-          └──────────────────┬──────────────────────┘                   └────────┬───────────┘                 │
-                             │ HTTP trigger                                      │                             │
-                             ▼                                                   ▼                             │
-                 ┌─────────────────────────────────────────────────┐                                           │
-                 │         Cloud Run Service (Docker)              │                                           │
-                 │         python -m app.main /arg. worker         │                                           │
-                 │                                                 │                                           │
-                 │  ┌──────────────────────────────────────────┐   │                                           │
-                 │  │   1 AUTH MODULE (auth/)                  │   │                                           │
-                 │  │   ├─ OAuth2 token refresh                │   │◄─────────────┐                            │
-                 │  │   └─ validate credentials                │   │              │ (secrets)                  │
-                 │  └─────────────┬────────────────────────────┘   │              │                            │
-                 │                │                                │              │                            │
-                 │  ┌─────────────▼──────────────────────────┐     │              └─────────────┐              │
-                 │  │   2  API MODULE (api/)                 │     │                            │              │
-                 │  │   └─ HTTPS requests from Strava        │     │──── HTTPS ────────────► Strava API        │
-                 │  └─────────────┬──────────────────────────┘     │                                           │
-                 │                │                                │                                           │
-                 │  ┌─────────────▼──────────────────────────┐     │                                           │
-                 │  │   3 INGEST MODULE (ingest/)            │     │                                           │
-                 │  │   ├─ filter new activities             │     │                                           │
-                 │  │   └─ flatten payload                   │     │                                           │
-                 │  └─────────────┬──────────────────────────┘     │                                           │
-                 │                │                                │                                           │
-                 │  ┌─────────────▼──────────────────────────┐     │                                           │
-                 │  │   4  STATE MODULE (state/)             │     │                                           │
-                 │  │   ├─ load last_seen checkpoint         │     │                                           │
-                 │  │   └─ save new state to GCS             │     │                                           │
-                 │  └─────────────┬──────────────────────────┘     │                                           │
-                 │                │                                │                                           │
-                 │  ┌─────────────▼──────────────────────────┐     │                                           │
-                 │  │   5  RAW WRITE (ingest/)               │     │                                           │
-                 │  │   └─ append-only to GCS (jsonl)        │     │                                           │
-                 │  └─────────────┬──────────────────────────┘     │                                           │
-                 │                │                                │                                           │
-                 │  ┌─────────────▼──────────────────────────┐     │                                           │
-                 │  │   6  STAGING TRANSFORM (staging/)      │     │                                           │
-                 │  │   ├─ clean & deduplicate data          │     │                                           │
-                 │  │   └─ flatten nested objects            │     │                                           │
-                 │  └─────────────┬──────────────────────────┘     │                                           │
-                 │                │                                │                                           │
-                 │  ┌─────────────▼──────────────────────────┐     │                                           │
-                 │  │   7  TRIGGER SQL (staging/)            │     │                                           │
-                 │  │   └─ execute BigQuery transformations  │     │                                           │
-                 │  └─────────────┬──────────────────────────┘     │                                           │
-                 └────────────────┼────────────────────────────────┘                                           │
-                                  │                                                                            │
-                ┌─────────────────┴──────────────────────┐                                                     │
-                │                                        │                                                     │
-                ▼                                        ▼                                                     │
-    ┌──────────────────────┐              ┌─────────────────────────────────┐                                  │
-    │ GCS (Data Lake)      │              │  BigQuery (Data Warehouse)      │                                  │
-    │                      │              │                                 │                                  │
-    │ ├─ raw/ (jsonl)      │              │ ├─ pipeline_query.sql           │                                  │
-    │ └─ state.json        │              │ │                               │                                  │
-    │    checkpoint        │              │ └─ pipeline_dash.sql            │                                  │
-    └──────────────────────┘              │    (dashboard analytical view)  │                                  │
-                                          │                                 │                                  │
-                                          └──────────────────────────┬──────┘                                  │
-                                                                     │                                         │
-                                                    ┌────────────────┘                                         │
-                                                    │                                                          │
-                                                    ▼                                                          │
-                                          ┌──────────────────────┐                                             │
-                                          │ BI Tools / Dashboards│                                             │
-                                          │ (Data Studio, etc.)  │                                             │
-                                          └──────────────────────┘                                             │
-│                                                                                                              │
-│  ┌──────────────────────┐                                                                                    │
-│  │ Artifact Registry    │◄──── Cloud Build (CI/CD via cloudbuild.yaml) ──────────────────────────────────────┤    
-│  │ - Docker images      │                                                                                    │
-│  │ - version tagged     │                                                                                    │
-│  └──────────────────────┘                                                                                    │
-│                                                                                                              │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+python -m app.main worker
+  - does the actual data pipeline work
+  - reads secrets and pipeline state
+  - fetches Strava activities
+  - writes raw and staging files to S3
+  - runs Athena SQL
+
+python -m app.main webhook
+  - exposes the public /webhook endpoint
+  - validates Strava verification and event requests
+  - starts the worker task in ECS
+
+python -m app.main create_sub
+  - is run manually after deployment
+  - registers the public callback URL in Strava
 
 
+3. AWS architecture flow
+------------------------
 
+Plain-English summary:
+
+A Strava webhook event or an optional scheduler starts the worker.
+The worker then reads secrets, pulls activities from Strava, writes data to S3,
+updates its checkpoint, and can finish with an Athena SQL step.
+After the Athena step, the curated dataset can be read directly by the BI layer,
+which in this project means Grafana querying Athena.
+The create_sub task is only a setup helper used to register the webhook URL.
+
+Main runtime flow:
+
++----------------------+     +----------------------+     +----------------------+
+| Strava webhook event | --> | ALB /webhook         | --> | ECS webhook service  |
+| GET verify / POST    |     | public entrypoint    |     | validates + triggers |
++----------------------+     +----------------------+     +----------+-----------+
+                                                                      |
+                                                                      | ecs:RunTask
+                                                                      v
+                                                         +------------+------------+
+                                                         | ECS worker task         |
+                                                         | fetch, filter, store    |
+                                                         +---+-----------+---------+
+                                                             |           |
+                                                             |           +----------------> Strava API
+                                                             +----------------------------> Secrets Manager
+                                                             +----------------------------> S3 raw/staging/state
+                                                             `----------------------------> Athena/Glue
+                                                                                           |
+                                                                                           v
+                                                                                +----------+-----------+
+                                                                                | BI layer / Grafana   |
+                                                                                | direct Athena query  |
+                                                                                +----------------------+
+
+Alternative trigger:
+
++------------------------+
+| EventBridge Scheduler  |
+| optional safety net    |
++-----------+------------+
+            |
+            v
+      ECS worker task
+
+One-time setup flow:
+
++----------------------+     +----------------------+     +-----------------------------+
+| Operator / deployer  | --> | ECS create_sub task  | --> | Strava subscriptions API    |
+| after terraform apply|     | registers callback   |     | stores the /webhook URL     |
++----------------------+     +----------------------+     +-----------------------------+
+
+Why this shape is easy to reason about:
+
+- The webhook service stays small and only decides whether to start work.
+- The worker does the real ingestion and storage logic.
+- Scheduler is optional and acts as a fallback, not the primary path.
+- Terraform provisions the AWS resources, but the runtime story is just: receive event, start worker, fetch data, store data.
+
+
+4. Terraform ownership
+----------------------
+
+Terraform in infra/terraform is the preferred implementation path because it
+already provisions the AWS resources and runtime environment expected by the
+Python application:
+
+- S3 bucket
+- Secrets Manager secrets
+- ECR repository
+- ECS cluster
+- worker task definition
+- webhook task definition and ECS service
+- create_sub task definition
+- ALB for webhook ingress
+- CloudWatch log groups
+- optional EventBridge Scheduler
+- optional Glue and Athena resources
+
+
+5. S3 layout used by the application
+------------------------------------
+
+s3://BUCKET_NAME/
+|-- state/
+|   `-- strava_state.json
+|-- raw/
+|   `-- strava/YYYY/MM/DD/activities_<run_id>.jsonl
+|-- staging/
+|   `-- strava/YYYY/MM/DD/activities_<run_id>.jsonl
+`-- main/
+    `-- optional Athena-managed output

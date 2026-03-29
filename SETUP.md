@@ -2,244 +2,203 @@
 
 ## Overview
 
-The Strava Pipeline has three execution modes:
+This repository targets AWS. The current runtime architecture is built around:
 
-| Mode | Type | Purpose | Trigger |
-|------|------|---------|---------|
-| `webhook` | Service | Receives Strava webhook events and triggers worker runs | Cloud Run service |
-| `worker` | Job | Fetches Strava activities, writes data, executes SQL pipeline | Cloud Run job |
-| `create_sub` | One-time Job | Creates/recreates Strava webhook subscription | Manual run |
+- ECS Fargate for all application modes
+- S3 for raw, staging, and state storage
+- AWS Secrets Manager for Strava credentials and webhook verification
+- Application Load Balancer for public webhook ingress
+- EventBridge Scheduler for optional cron-style worker runs
+- ECR for container images
+- CloudWatch Logs for runtime logs
+- Athena and Glue as an optional SQL/query layer
 
-Entrypoint routing:
+Terraform in [`infra/terraform`](infra/terraform/README.md) is the canonical, preferred, and best-supported way to provision this stack. Manual AWS setup is possible, but the repository documentation assumes Terraform is the default implementation path.
+
+## Runtime Modes
+
+The container supports three execution modes:
+
+| Mode | Entry Command | Deployment Shape | Purpose |
+|------|---------------|------------------|---------|
+| `worker` | `python -m app.main worker` | ECS Fargate task | Pull activities from Strava, write raw/staging data, update state, optionally run Athena SQL |
+| `webhook` | `python -m app.main webhook` | ECS Fargate service behind ALB | Handle Strava webhook verification and event delivery, then trigger the worker task with `ecs:RunTask` |
+| `create_sub` | `python -m app.main create_sub` | ECS Fargate task, launched manually | Create or recreate the Strava push subscription |
+
+Entrypoint routing is implemented in `app/main.py`.
+
+## Recommended Deployment Flow
+
+### 1. Provision infrastructure with Terraform
+
+Use the configuration in `infra/terraform` as the primary deployment path:
 
 ```bash
-python -m app.main webhook
-python -m app.main worker
-python -m app.main create_sub
+cd infra/terraform
+terraform init
+terraform plan
+terraform apply
 ```
 
-## Identity Model (Least Privilege)
+Terraform creates the AWS resources the application expects, including:
 
-Use separate service accounts. Do not run all components with one broad account.
+- S3 bucket
+- Secrets Manager secrets
+- ECR repository
+- ECS cluster
+- worker task definition
+- webhook task definition and ECS service
+- `create_sub` task definition
+- ALB and target group for the webhook
+- CloudWatch log groups
+- optional EventBridge Scheduler schedule
+- optional Glue catalog database and Athena tables
 
-Suggested principals:
+### 2. Build and push the container image
 
-| Principal | Used by | Responsibility |
-|----------|---------|----------------|
-| `sa-webhook` | Cloud Run service (`webhook`) | Invoke worker job on incoming event |
-| `sa-worker` | Cloud Run job (`worker`) | Read/write state and data, call Strava, run BigQuery |
-| `sa-create-sub` | Cloud Run job (`create_sub`) | Read Strava app secrets and create webhook subscription |
-| `sa-scheduler` | Cloud Scheduler | Invoke Cloud Run worker job |
-| `sa-cloud-build` | Cloud Build runtime | Build image and push to Artifact Registry |
-| `ci-cd-operator` (user or SA) | CI/CD administration | Edit Cloud Build pipeline config/triggers |
+Build the image from the repository root:
 
-## Minimum IAM Permissions
+```bash
+docker build -t strava-pipeline:latest .
+```
 
-### 1) `sa-worker` (runtime worker)
-
-Scope IAM as narrowly as possible (dataset, bucket, specific secrets).
-
-Required:
-
-- `roles/storage.objectAdmin` on the pipeline bucket (or a custom role with:
-  `storage.buckets.get`, `storage.objects.get`, `storage.objects.create`)
-- `roles/bigquery.jobUser` on project (required to create query jobs)
-- `roles/bigquery.dataEditor` on dataset `BQ_DATASET` (required for `INSERT INTO`)
-- `roles/secretmanager.secretAccessor` on:
-  - `strava-client-id`
-  - `strava-client-secret`
-  - `strava-refresh-token`
-
-If refresh token rotation writes a new secret version:
-
-- `roles/secretmanager.secretVersionAdder` on `strava-refresh-token`
-
-If your process also needs to manage secret version lifecycle (enable/disable/destroy):
-
-- `roles/secretmanager.secretVersionManager` on `strava-refresh-token`
-
-### 2) `sa-webhook` (runtime webhook)
-
-Required to trigger worker Cloud Run job:
-
-- `roles/run.jobsExecutor` on the target worker job  
-  (If your organization does not use this role, use `roles/run.invoker` as fallback.)
-
-### 3) `sa-create-sub` (subscription bootstrap job)
-
-Required:
-
-- `roles/secretmanager.secretAccessor` on:
-  - `strava-client-id`
-  - `strava-client-secret`
-
-No BigQuery or GCS permissions are required for this mode.
-
-### 4) `sa-scheduler` (Cloud Scheduler caller)
-
-Required:
-
-- `roles/run.invoker` (or `roles/run.jobsExecutor`) on worker job
-
-This account is used in Scheduler OIDC auth when calling `jobs:run`.
-
-### 5) `sa-cloud-build` (build runtime)
-
-Required:
-
-- `roles/artifactregistry.writer` on target Artifact Registry repository
-
-### 6) `ci-cd-operator` (build pipeline editor)
-
-Required:
-
-- `roles/cloudbuild.builds.editor`
-
-Use this only for identities that must edit Cloud Build definitions/triggers.
-
-## Environment Variables
-
-### Required
-
-| Variable | Type | Example | Used By |
-|----------|------|---------|---------|
-| `STRAVA_GCP_PROJECT` | String | `my-gcp-project-id` | All modes |
-| `BUCKET_NAME` | String | `strava-pipeline-bucket` | Worker |
-| `BQ_DATASET` | String | `strava_raw` | Worker |
-| `WEBHOOK_VERIFY_TOKEN` | String | `abc123xyz` | Webhook, create_sub |
-| `WEBHOOK_CALLBACK_URL` | String | `https://my-webhook.run.app/webhook` | create_sub |
-| `STRAVA_WORKER_JOB` | String | `strava-worker` | Webhook |
-
-### Optional
-
-| Variable | Default | Used By |
-|----------|---------|---------|
-| `STRAVA_GCP_REGION` | `europe-west1` | Webhook |
-| `BQ_LOCATION` | `europe-west1` | Worker |
-| `WEBHOOK_COOLDOWN_SECONDS` | `180` | Webhook |
-| `PORT` | `8080` | Webhook |
-
-## Secret Manager vs GCS State
-
-Clarification:
-
-- `strava-refresh-token` is stored in **Secret Manager**.
-- `strava-auth-state` is **not a secret**. It is persisted as state in **GCS**.
-
-### Secret Manager objects
-
-| Secret Name | Used By | Purpose |
-|-------------|---------|---------|
-| `strava-client-id` | Worker, create_sub | Strava OAuth client id |
-| `strava-client-secret` | Worker, create_sub | Strava OAuth client secret |
-| `strava-refresh-token` | Worker | Strava OAuth refresh token |
-
-## Cloud Storage Setup
-
-The worker uses `BUCKET_NAME` for raw payloads, staging payloads, and pipeline state.
-
-Structure:
+Authenticate Docker to ECR, tag the image with the repository URL returned by Terraform, and push it. If you do not set `container_image`, Terraform expects the image to exist at:
 
 ```text
-gs://BUCKET_NAME/
+<terraform output ecr_repository_url>:latest
+```
+
+### 3. Populate secrets
+
+Terraform creates the secret objects, but it does not fully configure runtime values for you.
+
+Required secrets are based on `SECRET_PREFIX`:
+
+| Secret Name Pattern | Used By | Purpose |
+|---------------------|---------|---------|
+| `*-client-id` | `worker`, `create_sub` | Strava OAuth client id |
+| `*-client-secret` | `worker`, `create_sub` | Strava OAuth client secret |
+| `*-auth-state` | `worker` | Refresh token payload, usually JSON with `refresh_token` |
+| `*-webhook-verify-token` | `webhook`, `create_sub` | Token used during Strava webhook verification |
+
+Notes:
+
+- `SECRET_PREFIX` defaults to `strava`.
+- `bootstrap_secrets = true` can prefill `client_id`, `client_secret`, and `auth_state`.
+- The webhook verify token secret is still expected to be set manually after apply.
+- The worker updates the `*-auth-state` secret when Strava rotates the refresh token.
+
+### 4. Point Strava at the webhook endpoint
+
+If `enable_webhook_service = true`, Terraform exposes the webhook service through an ALB. The public callback URL you register with Strava must point to the `/webhook` path on that endpoint.
+
+Typical forms are:
+
+```text
+<public-webhook-url>/webhook
+```
+
+If you configure `webhook_certificate_arn` and attach DNS, use your final HTTPS URL for Strava registration.
+
+### 5. Run `create_sub` once
+
+After the webhook endpoint and verify token are ready, run the `create_sub` task manually. This step is not automated by Terraform because it is an operational action against the live Strava API.
+
+Use the `create_subscription_task_definition_arn` output together with the same public subnets and outbound security group pattern used by the worker task.
+
+## Configuration Contract
+
+### Core environment variables
+
+These values are injected into containers by Terraform or supplied manually in local development:
+
+| Variable | Used By | Required | Notes |
+|----------|---------|----------|-------|
+| `BUCKET_NAME` | `worker` | Yes | S3 bucket for state and pipeline files |
+| `AWS_REGION` | All modes | Yes | AWS SDK region |
+| `SECRET_PREFIX` | All modes | Yes | Defaults to `strava` when omitted |
+| `PIPELINE_QUERY_ENGINE` | `worker` | No | `none` or `athena` |
+
+### Webhook runtime variables
+
+| Variable | Used By | Required | Notes |
+|----------|---------|----------|-------|
+| `ECS_CLUSTER` | `webhook` | Yes | Cluster name for `ecs:RunTask` |
+| `ECS_TASK_DEFINITION` | `webhook` | Yes | Worker task definition ARN |
+| `ECS_SUBNETS` | `webhook` | Yes | Comma-separated subnet ids |
+| `ECS_SECURITY_GROUPS` | `webhook` | Yes | Comma-separated security group ids |
+| `ECS_ASSIGN_PUBLIC_IP` | `webhook` | No | `ENABLED` or `DISABLED` |
+| `ECS_LAUNCH_TYPE` | `webhook` | No | Defaults to `FARGATE` |
+| `WEBHOOK_COOLDOWN_SECONDS` | `webhook` | No | Defaults to `180` |
+| `WEBHOOK_VERIFY_TOKEN_SECRET` | `webhook`, `create_sub` | No | Overrides the default secret name |
+| `PORT` | `webhook` | No | Defaults to `8080` |
+
+### Subscription bootstrap variables
+
+| Variable | Used By | Required | Notes |
+|----------|---------|----------|-------|
+| `WEBHOOK_CALLBACK_URL` | `create_sub` | Yes | Public Strava callback URL |
+| `WEBHOOK_VERIFY_TOKEN` | `create_sub`, `webhook` | No | Optional direct override instead of Secrets Manager |
+
+### Optional Athena variables
+
+These are required only when `PIPELINE_QUERY_ENGINE=athena`:
+
+| Variable | Used By | Required | Notes |
+|----------|---------|----------|-------|
+| `ATHENA_DATABASE` | `worker` | Yes | Glue/Athena database name |
+| `ATHENA_OUTPUT_S3` | `worker` | Yes | Query results bucket/prefix |
+| `ATHENA_WORKGROUP` | `worker` | No | Optional workgroup |
+| `ATHENA_TIMEOUT_SECONDS` | `worker` | No | Defaults to `300` |
+| `PIPELINE_SQL_PATH` | `worker` | No | Defaults to `sql/pipeline_query.sql` inside the container |
+
+## Data Layout
+
+### S3 object structure
+
+The application writes the following keys under `BUCKET_NAME`:
+
+```text
+s3://BUCKET_NAME/
   state/
     strava_state.json
   raw/
     strava/YYYY/MM/DD/activities_<run_id>.jsonl
   staging/
     strava/YYYY/MM/DD/activities_<run_id>.jsonl
+  main/
+    ... optional Athena-managed output for downstream tables
 ```
 
-Initialization:
+Important details:
 
-```bash
-gsutil mb -l europe-west1 gs://strava-pipeline-bucket
-echo '{"last_seen_timestamp": 0, "last_seen_activity_id": 0}' | \
-  gsutil cp - gs://strava-pipeline-bucket/state/strava_state.json
-```
+- `state/strava_state.json` is created by the application after the first successful run; no manual seed file is required.
+- `raw/` stores append-only envelopes with the original activity JSON.
+- `staging/` stores flattened activity rows used by Athena.
+- `main/` is only relevant when your SQL pipeline materializes output there.
 
-## BigQuery Setup
+### Athena and Glue
 
-The worker executes SQL from `sql/pipeline_query.sql`.
+If `pipeline_query_engine = "athena"`:
 
-Current SQL writes into:
+- Terraform creates a Glue database.
+- Terraform creates `strava_raw_ext` over `s3://<bucket>/staging/strava/`.
+- Terraform creates `strava_main` over `s3://<bucket>/main/`.
+- The worker executes `sql/pipeline_query.sql` after raw/staging writes and state update.
 
-- `${PROJECT_ID}.${BQ_DATASET}.strava_main`
+If `pipeline_query_engine = "none"`, the worker skips the SQL step.
 
-Current SQL reads from:
+## IAM and Access Expectations
 
-- `${PROJECT_ID}.${BQ_DATASET}.strava_raw_ext`
+Terraform provisions the roles used by ECS tasks and the optional scheduler. In practical terms:
 
-You must create dataset/tables/views/external tables required by that SQL before first run, unless your deployment automation creates them.
+- the worker task can read and write the S3 bucket
+- the worker task can read Strava secrets and update `*-auth-state`
+- the webhook task can read the webhook verify token secret
+- the webhook task can call `ecs:RunTask` for the worker task definition
+- the scheduler role can run the worker task when scheduling is enabled
 
-## Build and Deploy
-
-### Build image
-
-```bash
-docker build -t strava-pipeline:latest .
-```
-
-### Deploy webhook service
-
-```bash
-gcloud run deploy strava-webhook \
-  --image REGION-docker.pkg.dev/PROJECT/REPO/strava-pipeline:latest \
-  --region europe-west1 \
-  --service-account sa-webhook@PROJECT_ID.iam.gserviceaccount.com \
-  --set-env-vars "STRAVA_GCP_PROJECT=PROJECT_ID,WEBHOOK_VERIFY_TOKEN=TOKEN,STRAVA_WORKER_JOB=strava-worker,STRAVA_GCP_REGION=europe-west1" \
-  --args "webhook"
-```
-
-### Deploy worker job
-
-```bash
-gcloud run jobs create strava-worker \
-  --image REGION-docker.pkg.dev/PROJECT/REPO/strava-pipeline:latest \
-  --region europe-west1 \
-  --service-account sa-worker@PROJECT_ID.iam.gserviceaccount.com \
-  --set-env-vars "STRAVA_GCP_PROJECT=PROJECT_ID,BUCKET_NAME=strava-pipeline-bucket,BQ_DATASET=strava_raw,BQ_LOCATION=europe-west1" \
-  --args "worker"
-```
-
-### Deploy create_sub job
-
-```bash
-gcloud run jobs create strava-create-sub \
-  --image REGION-docker.pkg.dev/PROJECT/REPO/strava-pipeline:latest \
-  --region europe-west1 \
-  --service-account sa-create-sub@PROJECT_ID.iam.gserviceaccount.com \
-  --set-env-vars "STRAVA_GCP_PROJECT=PROJECT_ID,WEBHOOK_VERIFY_TOKEN=TOKEN,WEBHOOK_CALLBACK_URL=https://my-webhook.run.app/webhook" \
-  --args "create_sub"
-```
-
-### Run one-time webhook subscription setup
-
-```bash
-gcloud run jobs execute strava-create-sub --region europe-west1
-```
-
-## Cloud Scheduler (Optional)
-
-Example (hourly):
-
-```bash
-gcloud scheduler jobs create http strava-worker-schedule \
-  --location=europe-west1 \
-  --schedule="0 * * * *" \
-  --http-method=POST \
-  --uri="https://run.googleapis.com/v2/projects/PROJECT_ID/locations/europe-west1/jobs/strava-worker:run" \
-  --oidc-service-account-email="sa-scheduler@PROJECT_ID.iam.gserviceaccount.com"
-```
-
-## Cloud Build and Artifact Registry (CI/CD)
-
-Your CI pipeline needs:
-
-- Cloud Build runtime SA with `roles/artifactregistry.writer`
-- CI/CD operator identity with `roles/cloudbuild.builds.editor`
-
-`cloudbuild.yaml` builds and publishes `${_IMAGE}`. Ensure `_IMAGE` points to your Artifact Registry path.
+Manual deployments should preserve the same least-privilege shape.
 
 ## Local Development
 
@@ -247,50 +206,74 @@ Your CI pipeline needs:
 
 ```bash
 pip install -r requirements.txt
-gcloud auth application-default login
 ```
 
-### `.env` example
+You also need AWS credentials available to `boto3`, for example via:
+
+- `aws configure`
+- `aws sso login`
+- `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+
+### Example `.env`
 
 ```env
-STRAVA_GCP_PROJECT=my-project
-BUCKET_NAME=my-bucket
-BQ_DATASET=strava_raw
-WEBHOOK_VERIFY_TOKEN=local-test-token
+AWS_REGION=eu-north-1
+BUCKET_NAME=my-strava-pipeline-bucket
+SECRET_PREFIX=strava
+PIPELINE_QUERY_ENGINE=none
 WEBHOOK_CALLBACK_URL=http://localhost:8080/webhook
-STRAVA_WORKER_JOB=strava-worker
-BQ_LOCATION=europe-west1
-STRAVA_GCP_REGION=europe-west1
+WEBHOOK_VERIFY_TOKEN=local-test-token
+ECS_CLUSTER=strava-pipeline-cluster
+ECS_TASK_DEFINITION=strava-pipeline-worker
+ECS_SUBNETS=subnet-123,subnet-456
+ECS_SECURITY_GROUPS=sg-123
+ECS_ASSIGN_PUBLIC_IP=ENABLED
 ```
 
-### Run modes locally
+### Local entry commands
 
 ```bash
-python -m app.main webhook
 python -m app.main worker
+python -m app.main webhook
 python -m app.main create_sub
 ```
 
+Notes:
+
+- `worker` needs live AWS access for S3 and Secrets Manager.
+- `webhook` can run locally for endpoint testing, but the ECS trigger still requires valid AWS configuration.
+- `create_sub` calls the live Strava push subscription API.
+
 ## Troubleshooting
 
-### Webhook cannot trigger worker job
+### Webhook receives verification traffic but returns `403`
 
-- Verify `sa-webhook` has `run.jobsExecutor` (or `run.invoker`) on worker job
-- Verify `STRAVA_WORKER_JOB` and `STRAVA_GCP_REGION` are correct
+- confirm the callback URL registered with Strava matches the public ALB endpoint
+- confirm the stored `*-webhook-verify-token` value matches the token used during subscription creation
+- confirm `WEBHOOK_VERIFY_TOKEN_SECRET` points at the expected secret name if you overrode defaults
 
-### Worker fails on BigQuery `INSERT INTO`
+### Webhook accepts requests but does not trigger the worker
 
-- Verify `sa-worker` has `roles/bigquery.jobUser` on project
-- Verify `sa-worker` has `roles/bigquery.dataEditor` on dataset
-- Verify `BQ_LOCATION` matches dataset region
+- confirm `ECS_CLUSTER`, `ECS_TASK_DEFINITION`, `ECS_SUBNETS`, and `ECS_SECURITY_GROUPS` are present in the webhook task environment
+- confirm the task role still has `ecs:RunTask` and `iam:PassRole`
+- confirm outbound networking from the webhook task is available
 
-### Worker fails to read/write GCS
+### Worker fails before reading activities
 
-- Verify bucket name and region
-- Verify `sa-worker` bucket permissions (`storage.objects.get/create` at minimum)
+- confirm `BUCKET_NAME`, `AWS_REGION`, and the Secrets Manager values exist
+- confirm `*-auth-state` contains either a raw refresh token or JSON with `refresh_token`
+- confirm the worker task role can read the required secrets
 
-### Secret read/write errors
+### Worker writes raw/staging files but fails during SQL
 
-- Verify secret names exist
-- Verify `secretAccessor` on required secrets
-- If rotating refresh token versions, verify `secretVersionAdder`
+- confirm `PIPELINE_QUERY_ENGINE=athena`
+- confirm `ATHENA_DATABASE` and `ATHENA_OUTPUT_S3` are set
+- confirm the Glue database and tables exist in the same AWS account and region
+- confirm the worker task role has Athena and Glue read permissions
+
+### `create_sub` fails
+
+- confirm the ALB endpoint is publicly reachable
+- confirm `WEBHOOK_CALLBACK_URL` ends with `/webhook`
+- confirm the verify token used for creation matches the value served by the webhook
+- confirm the Strava client id and client secret secrets are populated

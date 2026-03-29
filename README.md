@@ -56,7 +56,6 @@ The project is currently focused on reliability and internal use rather than bei
 
 - **Error handling**: Limited retry logic for transient failures. Dead letter handling not yet implemented.
 - **Data model**: Pipeline assumes specific Strava activity schema. Schema changes upstream would require manual updates.
-- **Google Cloud optimization**: The pipeline is heavily optimized for Google Cloud Platform. Migrating to other cloud providers or on-premises deployments would require significant refactoring of infrastructure dependencies, secrets management, and deployment configurations.
 
 ## Future Development
 
@@ -65,7 +64,6 @@ Planned improvements for maturity:
 - **Real-time monitoring & alerts**: Dashboard for pipeline health, failed runs, and data freshness metrics.
 - **Intelligent retry & backoff**: Exponential backoff and dead-letter queue for handling ephemeral and persistent failures.
 - **Schema evolution**: Versioned data model with backward compatibility for upstream API changes.
-- **Deployment templates**: Helm charts / Terraform modules for multi-environment deployments.
-- **Observability**: Structured logging with trace IDs, OpenTelemetry instrumentation, and cost attribution.
+
 
 
