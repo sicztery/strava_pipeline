@@ -2,7 +2,7 @@
 
 Event-driven sports analytics pipeline on AWS. The project ingests Strava activity events via webhooks, lands raw and curated data in S3 and Athena, and powers a Grafana dashboard for reporting and trend analysis.
 
-## Recruiter Snapshot
+## Overview
 
 - Built as an end-to-end analytics system: API ingestion, cloud storage, transformation, SQL materialization, and BI consumption.
 - Uses Strava webhooks instead of constant polling, reducing unnecessary API traffic while keeping ingestion near real time.
@@ -28,7 +28,7 @@ The primary flow is webhook-driven. An optional EventBridge Scheduler can trigge
 ## Stack
 
 - Python 3.11, Flask, Boto3
-- AWS ECS Fargate, ALB, S3, Secrets Manager, CloudWatch Logs, EventBridge Scheduler, Athena, Glue, ECR
+- AWS ECS Fargate, ALB, S3, Secrets Manager, Athena, Glue, ECR
 - Terraform for infrastructure provisioning
 - Grafana querying Athena as the final visualization layer
 
@@ -65,6 +65,4 @@ The screenshot demonstrates that the curated Athena layer supports:
 This repository is meant to show a working cloud analytics pipeline rather than a fully packaged product. The main next-step areas are:
 
 - advanced retry, backoff, and dead-letter handling
-- broader automated test coverage
-- explicit schema versioning for upstream API changes
 - richer monitoring and alerting beyond logs and dashboarding

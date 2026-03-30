@@ -2,7 +2,7 @@ name: Build and Push to ECR
 
 on:
   push:
-    branches: ["aws", "main"]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
