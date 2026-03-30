@@ -1,69 +1,70 @@
 # Strava Pipeline
 
-A lightweight pipeline for ingesting activity data from the Strava API and forwarding it to a downstream data consumer.
+Event-driven sports analytics pipeline on AWS. The project ingests Strava activity events via webhooks, lands raw and curated data in S3 and Athena, and powers a Grafana dashboard for reporting and trend analysis.
 
-## Overview
+## Recruiter Snapshot
 
-`strava_pipeline` listens for activity updates from Strava and processes them in a simple event-driven workflow.
-Instead of periodically polling the API, the system relies on **Strava webhooks**, meaning new activity data is **pushed into the pipeline** whenever an event occurs.
+- Built as an end-to-end analytics system: API ingestion, cloud storage, transformation, SQL materialization, and BI consumption.
+- Uses Strava webhooks instead of constant polling, reducing unnecessary API traffic while keeping ingestion near real time.
+- Provisions infrastructure with Terraform, keeping runtime configuration aligned with the deployed AWS stack.
+- Organizes data into raw, staging, and analytics/main layers (`raw/`, `staging/`, `main/`) to separate source fidelity from query-ready models.
+- Materializes curated activity data in Athena and exposes it to Grafana for dashboards and exploratory analysis.
+- Demonstrates hands-on ownership across Python, AWS, Terraform, SQL, and analytics delivery.
 
-This approach reduces unnecessary API calls and enables near real-time processing.
+## Architecture
 
-## How it works
+`Strava -> Webhook -> ECS Worker -> S3 raw/staging -> Athena -> Grafana`
 
-1. **Strava webhook** sends an event notification when an activity is created or updated.
-2. The **`webhook`** endpoint receives the event and triggers the pipeline.
-3. A worker fetches the full activity details from the Strava API.
-4. The processed activity data is **pushed to the configured downstream consumer** (database, storage, or other service).
+The primary flow is webhook-driven. An optional EventBridge Scheduler can trigger the same worker as a safety net for missed events or backfills, but polling is not the main design.
 
-```
-Strava → Webhook → Pipeline Worker → Data Consumer
-```
+### Runtime Modes
 
-## Flexible Triggering
+| Mode | Entry Command | Responsibility |
+|------|---------------|----------------|
+| `webhook` | `python -m app.main webhook` | Public ingress, webhook verification, request validation, and ECS worker trigger |
+| `worker` | `python -m app.main worker` | Fetch from Strava, filter new activities, write raw/staging data, update checkpoint state, run Athena SQL |
+| `create_sub` | `python -m app.main create_sub` | One-time task for creating or recreating the Strava push subscription |
 
-The worker is **decoupled from webhook delivery**. While the primary flow is event-driven via webhooks, the worker can also be triggered independently:
+## Stack
 
-- **Webhook-driven** (default): Real-time ingestion when Strava pushes activity events.
-- **Scheduled (cron)**: Periodic runs to catch missed events or refresh historical data. Useful as a safety net or for backfills.
+- Python 3.11, Flask, Boto3
+- AWS ECS Fargate, ALB, S3, Secrets Manager, CloudWatch Logs, EventBridge Scheduler, Athena, Glue, ECR
+- Terraform for infrastructure provisioning
+- Grafana querying Athena as the final visualization layer
 
-Both modes use the same state management logic to track processed activities, so they can coexist without conflicts.
+## Analytics Output
 
-## Worker Architecture: strava_client
+![Anonymized Grafana dashboard](docs/images/grafana-dashboard-anonymized.png)
 
-The **`strava_client`** module serves as the core worker component and provides **complete and independent logic for querying the Strava API**. 
+The dashboard is included as proof that the pipeline ends in an analytics-ready consumption layer, not just raw JSON landing. The recent activity table is redacted for public sharing; the goal here is to show the data product, not personal ride details.
 
-Key aspects:
+The screenshot demonstrates that the curated Athena layer supports:
 
-- **API independence**: Encapsulates all Strava API communication, authentication, and request handling in a single, self-contained module.
-- **Reusable query logic**: The worker exposes a clean interface for fetching activity details and other Strava resources, making it easy to integrate with different triggering mechanisms (webhooks, scheduled jobs, etc.).
-- **Authentication management**: Handles token refresh and credential management transparently.
-- **Decoupled design**: Can be invoked independently without tight coupling to pipeline orchestration logic, enabling flexibility in deployment and testing.
+- KPI rollups such as distance, time, active days, heart rate, power, and elevation
+- recent activity monitoring and freshness checks
+- weekly and yearly trend analysis
+- scatter plots such as speed vs heart rate and elevation vs speed
+- segmentation by activity type across the same modeled dataset
 
-## Key Characteristics
+## Key Engineering Decisions
 
-* Event-driven architecture
-* Push-based ingestion (no polling required)
-* Designed for reliable, repeatable activity ingestion
-* Easy to integrate with external data stores or analytics pipelines
+- Webhook-first ingestion: Strava pushes activity events into the system, avoiding wasteful polling as the primary path.
+- Decoupled trigger and worker: the public webhook validates requests and launches an ECS task, while the worker owns fetching, filtering, storage, and SQL execution.
+- Incremental processing with checkpoint state: the worker stores the last processed position in S3 so runs stay resumable and deterministic.
+- Layered storage and modeling: raw payloads are preserved, transformed records are written to staging, and SQL materializes a curated analytics table in Athena.
+- Terraform-first deployment: infrastructure code provisions the AWS resources and injects the runtime contract the application expects.
 
-## Status
+## Repository Docs
 
-Work in progress.
-The project is currently focused on reliability and internal use rather than being a fully packaged public tool.
+- [SETUP.md](SETUP.md) covers deployment, secrets, runtime configuration, and local development.
+- [infra/terraform/README.md](infra/terraform/README.md) documents the AWS stack and Terraform inputs and outputs.
+- [scheme.txt](scheme.txt) provides a concise repository and architecture map.
 
-## Limitations
+## Current Scope
 
-- **Error handling**: Limited retry logic for transient failures. Dead letter handling not yet implemented.
-- **Data model**: Pipeline assumes specific Strava activity schema. Schema changes upstream would require manual updates.
+This repository is meant to show a working cloud analytics pipeline rather than a fully packaged product. The main next-step areas are:
 
-## Future Development
-
-Planned improvements for maturity:
-
-- **Real-time monitoring & alerts**: Dashboard for pipeline health, failed runs, and data freshness metrics.
-- **Intelligent retry & backoff**: Exponential backoff and dead-letter queue for handling ephemeral and persistent failures.
-- **Schema evolution**: Versioned data model with backward compatibility for upstream API changes.
-
-
-
+- advanced retry, backoff, and dead-letter handling
+- broader automated test coverage
+- explicit schema versioning for upstream API changes
+- richer monitoring and alerting beyond logs and dashboarding
