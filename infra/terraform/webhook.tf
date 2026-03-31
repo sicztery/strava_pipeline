@@ -1,5 +1,5 @@
 resource "aws_security_group" "webhook_alb" {
-  count  = var.enable_webhook_service ? 1 : 0
+  count  = var.enable_webhook_service && var.enable_legacy_webhook_service ? 1 : 0
   name   = "${local.name}-webhook-alb-sg"
   vpc_id = var.vpc_id
 
@@ -28,7 +28,7 @@ resource "aws_security_group" "webhook_alb" {
 }
 
 resource "aws_security_group" "webhook" {
-  count  = var.enable_webhook_service ? 1 : 0
+  count  = var.enable_webhook_service && var.enable_legacy_webhook_service ? 1 : 0
   name   = "${local.name}-webhook-sg"
   vpc_id = var.vpc_id
 
@@ -43,7 +43,7 @@ resource "aws_security_group" "webhook" {
 }
 
 resource "aws_security_group_rule" "webhook_ingress" {
-  count                    = var.enable_webhook_service ? 1 : 0
+  count                    = var.enable_webhook_service && var.enable_legacy_webhook_service ? 1 : 0
   type                     = "ingress"
   from_port                = var.webhook_container_port
   to_port                  = var.webhook_container_port
@@ -53,7 +53,7 @@ resource "aws_security_group_rule" "webhook_ingress" {
 }
 
 resource "aws_lb" "webhook" {
-  count              = var.enable_webhook_service ? 1 : 0
+  count              = var.enable_webhook_service && var.enable_legacy_webhook_service ? 1 : 0
   name               = "${local.name}-webhook-alb"
   load_balancer_type = "application"
   internal           = false
@@ -63,7 +63,7 @@ resource "aws_lb" "webhook" {
 }
 
 resource "aws_lb_target_group" "webhook" {
-  count       = var.enable_webhook_service ? 1 : 0
+  count       = var.enable_webhook_service && var.enable_legacy_webhook_service ? 1 : 0
   name        = "${local.name}-webhook-tg"
   port        = var.webhook_container_port
   protocol    = "HTTP"
@@ -82,7 +82,7 @@ resource "aws_lb_target_group" "webhook" {
 }
 
 resource "aws_lb_listener" "webhook_http" {
-  count             = var.enable_webhook_service && var.webhook_certificate_arn == "" ? 1 : 0
+  count             = var.enable_webhook_service && var.enable_legacy_webhook_service && var.webhook_certificate_arn == "" ? 1 : 0
   load_balancer_arn = aws_lb.webhook[0].arn
   port              = 80
   protocol          = "HTTP"
@@ -94,7 +94,7 @@ resource "aws_lb_listener" "webhook_http" {
 }
 
 resource "aws_lb_listener" "webhook_https" {
-  count             = var.enable_webhook_service && var.webhook_certificate_arn != "" ? 1 : 0
+  count             = var.enable_webhook_service && var.enable_legacy_webhook_service && var.webhook_certificate_arn != "" ? 1 : 0
   load_balancer_arn = aws_lb.webhook[0].arn
   port              = 443
   protocol          = "HTTPS"
@@ -108,7 +108,7 @@ resource "aws_lb_listener" "webhook_https" {
 }
 
 resource "aws_lb_listener" "webhook_http_redirect" {
-  count             = var.enable_webhook_service && var.webhook_certificate_arn != "" ? 1 : 0
+  count             = var.enable_webhook_service && var.enable_legacy_webhook_service && var.webhook_certificate_arn != "" ? 1 : 0
   load_balancer_arn = aws_lb.webhook[0].arn
   port              = 80
   protocol          = "HTTP"
@@ -124,7 +124,7 @@ resource "aws_lb_listener" "webhook_http_redirect" {
 }
 
 resource "aws_ecs_task_definition" "webhook" {
-  count                    = var.enable_webhook_service ? 1 : 0
+  count                    = var.enable_webhook_service && var.enable_legacy_webhook_service ? 1 : 0
   family                   = "${local.name}-webhook"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -167,7 +167,7 @@ resource "aws_ecs_task_definition" "webhook" {
 }
 
 resource "aws_ecs_service" "webhook" {
-  count           = var.enable_webhook_service ? 1 : 0
+  count           = var.enable_webhook_service && var.enable_legacy_webhook_service ? 1 : 0
   name            = "${local.name}-webhook"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.webhook[0].arn

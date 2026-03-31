@@ -4,10 +4,10 @@
 
 This repository targets AWS. The current runtime architecture is built around:
 
-- ECS Fargate for all application modes
+- API Gateway HTTP API and Lambda for public webhook ingress
+- ECS Fargate for the worker and `create_sub`
 - S3 for raw, staging, and state storage
 - AWS Secrets Manager for Strava credentials and webhook verification
-- Application Load Balancer for public webhook ingress
 - EventBridge Scheduler for optional cron-style worker runs
 - ECR for container images
 - CloudWatch Logs for runtime logs
@@ -22,10 +22,10 @@ The container supports three execution modes:
 | Mode | Entry Command | Deployment Shape | Purpose |
 |------|---------------|------------------|---------|
 | `worker` | `python -m app.main worker` | ECS Fargate task | Pull activities from Strava, write raw/staging data, update state, optionally run Athena SQL |
-| `webhook` | `python -m app.main webhook` | ECS Fargate service behind ALB | Handle Strava webhook verification and event delivery, then trigger the worker task with `ecs:RunTask` |
+| `webhook` | `lambda_src/webhook_handler.lambda_handler` | Lambda behind API Gateway HTTP API | Handle Strava webhook verification and event delivery, then trigger the worker task with `ecs:RunTask` |
 | `create_sub` | `python -m app.main create_sub` | ECS Fargate task, launched manually | Create or recreate the Strava push subscription |
 
-Entrypoint routing is implemented in `app/main.py`.
+The legacy Flask webhook entrypoint remains in `app/main.py` only for staged migration and local testing.
 
 ## Recommended Deployment Flow
 
@@ -47,9 +47,9 @@ Terraform creates the AWS resources the application expects, including:
 - ECR repository
 - ECS cluster
 - worker task definition
-- webhook task definition and ECS service
+- Lambda webhook function and API Gateway HTTP API
+- legacy webhook task definition and ECS service when `enable_legacy_webhook_service = true`
 - `create_sub` task definition
-- ALB and target group for the webhook
 - CloudWatch log groups
 - optional EventBridge Scheduler schedule
 - optional Glue catalog database and Athena tables
@@ -90,19 +90,19 @@ Notes:
 
 ### 4. Point Strava at the webhook endpoint
 
-If `enable_webhook_service = true`, Terraform exposes the webhook service through an ALB. The public callback URL you register with Strava must point to the `/webhook` path on that endpoint.
+If `enable_webhook_service = true`, Terraform exposes the webhook through API Gateway HTTP API and outputs the final callback URL automatically. The public callback URL you register with Strava must point to the `/webhook` path on that endpoint.
 
 Typical forms are:
 
 ```text
-<public-webhook-url>/webhook
+https://<api-id>.execute-api.<region>.amazonaws.com/webhook
 ```
 
-If you configure `webhook_certificate_arn` and attach DNS, use your final HTTPS URL for Strava registration.
+Keep `enable_legacy_webhook_service = true` during rollout if you want the previous ALB/ECS ingress to stay online until Strava is re-registered against the new callback URL.
 
 ### 5. Run `create_sub` once
 
-After the webhook endpoint and verify token are ready, run the `create_sub` task manually. This step is not automated by Terraform because it is an operational action against the live Strava API.
+After the webhook endpoint and verify token are ready, run the `create_sub` task manually. Terraform now injects the callback URL automatically from API Gateway, so this step is mainly about rotating the live Strava subscription to the new ingress.
 
 Use the `create_subscription_task_definition_arn` output together with the same public subnets and outbound security group pattern used by the worker task.
 
@@ -129,16 +129,14 @@ These values are injected into containers by Terraform or supplied manually in l
 | `ECS_SECURITY_GROUPS` | `webhook` | Yes | Comma-separated security group ids |
 | `ECS_ASSIGN_PUBLIC_IP` | `webhook` | No | `ENABLED` or `DISABLED` |
 | `ECS_LAUNCH_TYPE` | `webhook` | No | Defaults to `FARGATE` |
-| `WEBHOOK_COOLDOWN_SECONDS` | `webhook` | No | Defaults to `180` |
 | `WEBHOOK_VERIFY_TOKEN_SECRET` | `webhook`, `create_sub` | No | Overrides the default secret name |
-| `PORT` | `webhook` | No | Defaults to `8080` |
+| `WEBHOOK_VERIFY_TOKEN` | `webhook`, `create_sub` | No | Optional direct override instead of Secrets Manager |
 
 ### Subscription bootstrap variables
 
 | Variable | Used By | Required | Notes |
 |----------|---------|----------|-------|
-| `WEBHOOK_CALLBACK_URL` | `create_sub` | Yes | Public Strava callback URL |
-| `WEBHOOK_VERIFY_TOKEN` | `create_sub`, `webhook` | No | Optional direct override instead of Secrets Manager |
+| `WEBHOOK_CALLBACK_URL` | `create_sub` | Yes | Populated automatically by Terraform from the API Gateway invoke URL |
 
 ### Optional Athena variables
 
@@ -194,8 +192,8 @@ Terraform provisions the roles used by ECS tasks and the optional scheduler. In 
 
 - the worker task can read and write the S3 bucket
 - the worker task can read Strava secrets and update `*-auth-state`
-- the webhook task can read the webhook verify token secret
-- the webhook task can call `ecs:RunTask` for the worker task definition
+- the Lambda webhook can read the webhook verify token secret
+- the Lambda webhook can call `ecs:RunTask` for the worker task definition
 - the scheduler role can run the worker task when scheduling is enabled
 
 Manual deployments should preserve the same least-privilege shape.
@@ -241,14 +239,14 @@ python -m app.main create_sub
 Notes:
 
 - `worker` needs live AWS access for S3 and Secrets Manager.
-- `webhook` can run locally for endpoint testing, but the ECS trigger still requires valid AWS configuration.
+- `webhook` can still run locally for endpoint testing, but production ingress is now API Gateway plus Lambda.
 - `create_sub` calls the live Strava push subscription API.
 
 ## Troubleshooting
 
 ### Webhook receives verification traffic but returns `403`
 
-- confirm the callback URL registered with Strava matches the public ALB endpoint
+- confirm the callback URL registered with Strava matches the API Gateway webhook output
 - confirm the stored `*-webhook-verify-token` value matches the token used during subscription creation
 - confirm `WEBHOOK_VERIFY_TOKEN_SECRET` points at the expected secret name if you overrode defaults
 
@@ -256,7 +254,7 @@ Notes:
 
 - confirm `ECS_CLUSTER`, `ECS_TASK_DEFINITION`, `ECS_SUBNETS`, and `ECS_SECURITY_GROUPS` are present in the webhook task environment
 - confirm the task role still has `ecs:RunTask` and `iam:PassRole`
-- confirm outbound networking from the webhook task is available
+- confirm the Lambda IAM role still has `ecs:RunTask` and `iam:PassRole`
 
 ### Worker fails before reading activities
 
@@ -273,7 +271,7 @@ Notes:
 
 ### `create_sub` fails
 
-- confirm the ALB endpoint is publicly reachable
+- confirm the API Gateway endpoint is publicly reachable
 - confirm `WEBHOOK_CALLBACK_URL` ends with `/webhook`
 - confirm the verify token used for creation matches the value served by the webhook
 - confirm the Strava client id and client secret secrets are populated

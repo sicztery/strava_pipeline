@@ -13,22 +13,22 @@ Event-driven sports analytics pipeline on AWS. The project ingests Strava activi
 
 ## Architecture
 
-`Strava -> Webhook -> ECS Worker -> S3 raw/staging -> Athena -> Grafana`
+`Strava -> API Gateway -> Lambda Webhook -> ECS Worker -> S3 raw/staging -> Athena -> Grafana`
 
-The primary flow is webhook-driven. An optional EventBridge Scheduler can trigger the same worker as a safety net for missed events or backfills, but polling is not the main design.
+The primary flow is webhook-driven through API Gateway and Lambda. An optional EventBridge Scheduler can trigger the same worker as a safety net for missed events or backfills, but polling is not the main design.
 
 ### Runtime Modes
 
 | Mode | Entry Command | Responsibility |
 |------|---------------|----------------|
-| `webhook` | `python -m app.main webhook` | Public ingress, webhook verification, request validation, and ECS worker trigger |
+| `webhook` | `lambda_src/webhook_handler.lambda_handler` | Public ingress, webhook verification, request validation, and ECS worker trigger |
 | `worker` | `python -m app.main worker` | Fetch from Strava, filter new activities, write raw/staging data, update checkpoint state, run Athena SQL |
 | `create_sub` | `python -m app.main create_sub` | One-time task for creating or recreating the Strava push subscription |
 
 ## Stack
 
-- Python 3.11, Flask, Boto3
-- AWS ECS Fargate, ALB, S3, Secrets Manager, Athena, Glue, ECR
+- Python 3.11, Boto3, Flask for local legacy webhook testing
+- AWS Lambda, API Gateway HTTP API, ECS Fargate, S3, Secrets Manager, Athena, Glue, ECR
 - Terraform for infrastructure provisioning
 - Grafana querying Athena as the final visualization layer
 
@@ -49,7 +49,7 @@ The screenshot demonstrates that the curated Athena layer supports:
 ## Key Engineering Decisions
 
 - Webhook-first ingestion: Strava pushes activity events into the system, avoiding wasteful polling as the primary path.
-- Decoupled trigger and worker: the public webhook validates requests and launches an ECS task, while the worker owns fetching, filtering, storage, and SQL execution.
+- Decoupled trigger and worker: API Gateway and Lambda handle public ingress, validation, and worker triggering, while the worker owns fetching, filtering, storage, and SQL execution.
 - Incremental processing with checkpoint state: the worker stores the last processed position in S3 so runs stay resumable and deterministic.
 - Layered storage and modeling: raw payloads are preserved, transformed records are written to staging, and SQL materializes a curated analytics table in Athena.
 - Terraform-first deployment: infrastructure code provisions the AWS resources and injects the runtime contract the application expects.

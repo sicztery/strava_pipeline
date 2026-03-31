@@ -1,10 +1,10 @@
 import os
 import logging
 import requests
-from dotenv import load_dotenv
 from app.aws_secrets import get_secret
+from app.runtime_env import load_local_dotenv
 
-load_dotenv()
+load_local_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,9 +32,11 @@ BASE_URL = "https://www.strava.com/api/v3/push_subscriptions"
 
 def _load_config():
     verify_token = os.getenv("WEBHOOK_VERIFY_TOKEN")
+    verify_token_source = "env"
     if not verify_token:
         try:
             verify_token = get_secret(WEBHOOK_VERIFY_TOKEN_SECRET)
+            verify_token_source = "secretsmanager"
         except Exception as e:
             raise RuntimeError(
                 "Missing env var: WEBHOOK_VERIFY_TOKEN"
@@ -46,6 +48,9 @@ def _load_config():
 
     client_id = get_secret(CLIENT_ID_SECRET)
     client_secret = get_secret(CLIENT_SECRET_SECRET)
+
+    logger.info("Using webhook verify token from %s", verify_token_source)
+    logger.info("Using callback URL: %s", callback_url)
 
     return client_id, client_secret, verify_token, callback_url
 

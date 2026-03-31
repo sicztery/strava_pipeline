@@ -144,6 +144,11 @@ variable "enable_webhook_service" {
   default = true
 }
 
+variable "enable_legacy_webhook_service" {
+  type    = bool
+  default = true
+}
+
 variable "webhook_container_port" {
   type    = number
   default = 8080

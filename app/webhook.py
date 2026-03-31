@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from dotenv import load_dotenv
 from app.aws_secrets import get_secret
+from app.runtime_env import load_local_dotenv
 import boto3
 import os
 import logging
@@ -23,7 +23,7 @@ logger = logging.getLogger("strava_pipeline")
 # ENV
 # ======================
 
-load_dotenv()
+load_local_dotenv()
 
 SECRET_PREFIX = os.getenv("SECRET_PREFIX", "strava")
 WEBHOOK_VERIFY_TOKEN_SECRET = os.getenv(

@@ -1,0 +1,13 @@
+.env
+.git
+.github
+__pycache__/
+*.py[cod]
+*.tfstate
+*.tfstate.*
+.terraform/
+tests/
+infra/
+docs/
+scheme.txt
+SETUP.md

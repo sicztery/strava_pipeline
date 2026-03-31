@@ -54,13 +54,25 @@ locals {
       } : k => v if v != "" }
   )
 
+  webhook_lambda_env = {
+    ECS_CLUSTER                 = aws_ecs_cluster.main.name
+    ECS_TASK_DEFINITION         = aws_ecs_task_definition.worker.arn
+    ECS_SUBNETS                 = join(",", var.public_subnet_ids)
+    ECS_SECURITY_GROUPS         = aws_security_group.worker.id
+    ECS_ASSIGN_PUBLIC_IP        = var.assign_public_ip
+    ECS_LAUNCH_TYPE             = "FARGATE"
+    WEBHOOK_VERIFY_TOKEN_SECRET = local.secret_names.webhook_verify_token
+  }
+
+  webhook_callback_url = var.enable_webhook_service ? "${aws_apigatewayv2_api.webhook[0].api_endpoint}/webhook" : var.webhook_callback_url
+
   create_subscription_env = merge(
     local.container_env,
     {
       WEBHOOK_VERIFY_TOKEN_SECRET = local.secret_names.webhook_verify_token
     },
     { for k, v in {
-        WEBHOOK_CALLBACK_URL = var.webhook_callback_url
+        WEBHOOK_CALLBACK_URL = local.webhook_callback_url
       } : k => v if v != "" }
   )
 }
