@@ -6,15 +6,10 @@ logger = logging.getLogger("entrypoint")
 
 
 def main():
-
     mode = sys.argv[1] if len(sys.argv) > 1 else "worker"
     logger.info(f"Starting mode: {mode}")
 
-    if mode == "webhook":
-        from app.webhook import run_webhook
-        run_webhook()
-
-    elif mode == "worker":
+    if mode == "worker":
         from app.strava_client import run_pipeline
         run_pipeline()
 
@@ -23,7 +18,7 @@ def main():
         create_subscription()
 
     else:
-        raise ValueError(f"Unknown mode: {mode}")
+        raise ValueError(f"Unknown mode: {mode}. Supported modes: worker, create_sub")
 
 
 if __name__ == "__main__":

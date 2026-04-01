@@ -17,6 +17,7 @@ def fetch_activities(
     - Does NOT guarantee order
     - Does NOT filter by time
     - after_timestamp is just a hint to the API
+    
     """
 
     if not access_token:

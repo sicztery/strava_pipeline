@@ -6,11 +6,11 @@ STRAVA PIPELINE - REPOSITORY MAP AND AWS FLOW
 
 strava_pipeline/
 |-- app/
-|   |-- main.py                -> Single container entrypoint; chooses worker, webhook, or create_sub mode.
-|   |-- strava_client.py       -> Main worker orchestrator; runs auth, fetch, filtering, S3 writes, state update and Athena SQL.
-|   |-- webhook.py             -> Lightweight Flask service; verifies Strava webhook calls and starts the ECS worker task.
-|   |-- create_subscription.py -> One-time admin task; removes old Strava subscriptions and creates the current webhook subscription.
+|   |-- main.py                -> Container entrypoint; chooses worker or create_sub mode.
+|   |-- create_subscription.py -> Manual admin/bootstrap task; verifies callback reachability and manages the Strava push subscription.
 |   |-- aws_secrets.py         -> Shared Secrets Manager helper; reads secrets and updates the rotated refresh token when needed.
+|   |-- runtime_env.py         -> Loads .env only outside AWS-managed runtimes.
+|   |-- strava_client.py       -> Main worker orchestrator; runs auth, fetch, filtering, S3 writes, state update and Athena SQL.
 |   |-- api/
 |   |   `-- strava_api.py      -> Calls the Strava activities API and returns raw activity payloads.
 |   |-- auth/
@@ -19,11 +19,13 @@ strava_pipeline/
 |   |   |-- filter.py          -> Keeps only activities newer than the saved checkpoint and calculates the next checkpoint.
 |   |   `-- raw_writer.py      -> Writes append-only raw activity envelopes to S3 as JSONL files.
 |   |-- staging/
-|   |   |-- transformer.py     -> Flattens nested Strava JSON into a cleaner analytics-friendly record.
+|   |   |-- transformer.py     -> Flattens nested Strava JSON into an analytics-friendly record.
 |   |   |-- stage_writer.py    -> Saves transformed activity rows to the S3 staging area as JSONL.
 |   |   `-- query_trigger.py   -> Runs the Athena SQL step when PIPELINE_QUERY_ENGINE is enabled.
 |   `-- state/
 |       `-- state_manager.py   -> Loads and saves pipeline state in S3 so the worker knows where to resume.
+|-- lambda_src/
+|   `-- webhook_handler.py     -> Production webhook handler for Lambda; verifies Strava requests and starts the ECS worker task.
 |-- sql/
 |   `-- pipeline_query.sql     -> Inserts new staged rows into the Athena main table.
 |-- infra/
@@ -33,8 +35,8 @@ strava_pipeline/
 `-- scheme.txt                 -> This repository and architecture map.
 
 
-2. Runtime modes
-----------------
+2. Runtime surfaces
+-------------------
 
 python -m app.main worker
   - does the actual data pipeline work
@@ -43,14 +45,15 @@ python -m app.main worker
   - writes raw and staging files to S3
   - runs Athena SQL
 
-python -m app.main webhook
-  - exposes the public /webhook endpoint
-  - validates Strava verification and event requests
-  - starts the worker task in ECS
-
 python -m app.main create_sub
   - is run manually after deployment
-  - registers the public callback URL in Strava
+  - verifies the callback URL
+  - creates or reuses the Strava push subscription
+
+lambda_src/webhook_handler.lambda_handler
+  - serves GET /webhook for Strava verification
+  - serves POST /webhook for event delivery
+  - starts the ECS worker task with ecs:RunTask
 
 
 3. AWS architecture flow
@@ -58,37 +61,38 @@ python -m app.main create_sub
 
 Plain-English summary:
 
-A Strava webhook event or an optional scheduler starts the worker.
-The worker then reads secrets, pulls activities from Strava, writes data to S3,
+Strava calls the public webhook endpoint exposed by API Gateway.
+API Gateway invokes the Lambda webhook handler.
+The Lambda validates the request and starts the ECS worker task.
+The worker reads secrets, fetches activities from Strava, writes data to S3,
 updates its checkpoint, and can finish with an Athena SQL step.
-After the Athena step, the curated dataset can be read directly by the BI layer,
-which in this project means Grafana querying Athena.
+Grafana can then query the curated Athena layer.
 The create_sub task is only a setup helper used to register the webhook URL.
 
 Main runtime flow:
 
 +----------------------+     +----------------------+     +----------------------+
-| Strava webhook event | --> | ALB /webhook         | --> | ECS webhook service  |
-| GET verify / POST    |     | public entrypoint    |     | validates + triggers |
+| Strava webhook event | --> | API Gateway HTTP API | --> | Lambda webhook       |
+| GET verify / POST    |     | public /webhook      |     | validates + triggers |
 +----------------------+     +----------------------+     +----------+-----------+
-                                                                      |
-                                                                      | ecs:RunTask
-                                                                      v
-                                                         +------------+------------+
-                                                         | ECS worker task         |
-                                                         | fetch, filter, store    |
-                                                         +---+-----------+---------+
-                                                             |           |
-                                                             |           +----------------> Strava API
-                                                             +----------------------------> Secrets Manager
-                                                             +----------------------------> S3 raw/staging/state
-                                                             `----------------------------> Athena/Glue
-                                                                                           |
-                                                                                           v
-                                                                                +----------+-----------+
-                                                                                | BI layer / Grafana   |
-                                                                                | direct Athena query  |
-                                                                                +----------------------+
+                                                                     |
+                                                                     | ecs:RunTask
+                                                                     v
+                                                        +------------+------------+
+                                                        | ECS worker task         |
+                                                        | fetch, filter, store    |
+                                                        +---+-----------+---------+
+                                                            |           |
+                                                            |           +----------------> Strava API
+                                                            +----------------------------> Secrets Manager
+                                                            +----------------------------> S3 raw/staging/state
+                                                            `----------------------------> Athena/Glue
+                                                                                          |
+                                                                                          v
+                                                                               +----------+-----------+
+                                                                               | BI layer / Grafana   |
+                                                                               | direct Athena query  |
+                                                                               +----------------------+
 
 Alternative trigger:
 
@@ -107,29 +111,22 @@ One-time setup flow:
 | after terraform apply|     | registers callback   |     | stores the /webhook URL     |
 +----------------------+     +----------------------+     +-----------------------------+
 
-Why this shape is easy to reason about:
-
-- The webhook service stays small and only decides whether to start work.
-- The worker does the real ingestion and storage logic.
-- Scheduler is optional and acts as a fallback, not the primary path.
-- Terraform provisions the AWS resources, but the runtime story is just: receive event, start worker, fetch data, store data.
-
 
 4. Terraform ownership
 ----------------------
 
 Terraform in infra/terraform is the preferred implementation path because it
 already provisions the AWS resources and runtime environment expected by the
-Python application:
+current application:
 
 - S3 bucket
 - Secrets Manager secrets
 - ECR repository
 - ECS cluster
 - worker task definition
-- webhook task definition and ECS service
 - create_sub task definition
-- ALB for webhook ingress
+- Lambda webhook function
+- API Gateway HTTP API
 - CloudWatch log groups
 - optional EventBridge Scheduler
 - optional Glue and Athena resources

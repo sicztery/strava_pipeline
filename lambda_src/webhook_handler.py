@@ -11,8 +11,6 @@ logging.basicConfig(
 
 logger = logging.getLogger("strava_pipeline.lambda_webhook")
 
-_secret_cache = {}
-
 
 def _response(status_code: int, body: dict) -> dict:
     return {
@@ -48,9 +46,6 @@ def _ecs_client():
 
 
 def _get_secret(secret_name: str) -> str:
-    if secret_name in _secret_cache:
-        return _secret_cache[secret_name]
-
     client = _secrets_client()
 
     try:
@@ -65,7 +60,6 @@ def _get_secret(secret_name: str) -> str:
             raise RuntimeError(f"Secret has no string value: {secret_name}")
         value = value.decode("utf-8")
 
-    _secret_cache[secret_name] = value
     return value
 
 

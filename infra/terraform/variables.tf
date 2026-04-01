@@ -143,33 +143,3 @@ variable "enable_webhook_service" {
   type    = bool
   default = true
 }
-
-variable "enable_legacy_webhook_service" {
-  type    = bool
-  default = true
-}
-
-variable "webhook_container_port" {
-  type    = number
-  default = 8080
-}
-
-variable "webhook_desired_count" {
-  type    = number
-  default = 1
-}
-
-variable "webhook_cooldown_seconds" {
-  type    = number
-  default = 180
-}
-
-variable "webhook_callback_url" {
-  type    = string
-  default = ""
-}
-
-variable "webhook_certificate_arn" {
-  type    = string
-  default = ""
-}

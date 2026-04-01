@@ -18,21 +18,6 @@ output "worker_security_group_id" {
   value = aws_security_group.worker.id
 }
 
-output "webhook_service_name" {
-  value       = var.enable_webhook_service && var.enable_legacy_webhook_service ? aws_ecs_service.webhook[0].name : null
-  description = "Deprecated legacy ECS webhook service name. Null when legacy webhook ingress is disabled."
-}
-
-output "webhook_task_definition_arn" {
-  value       = var.enable_webhook_service && var.enable_legacy_webhook_service ? aws_ecs_task_definition.webhook[0].arn : null
-  description = "Deprecated legacy ECS webhook task definition ARN. Null when legacy webhook ingress is disabled."
-}
-
-output "webhook_alb_dns_name" {
-  value       = var.enable_webhook_service && var.enable_legacy_webhook_service ? aws_lb.webhook[0].dns_name : null
-  description = "Deprecated legacy webhook ALB DNS name. Null when legacy webhook ingress is disabled."
-}
-
 output "webhook_api_invoke_url" {
   value       = var.enable_webhook_service ? aws_apigatewayv2_api.webhook[0].api_endpoint : null
   description = "Base invoke URL for the Lambda-backed webhook HTTP API."

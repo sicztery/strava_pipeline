@@ -2,36 +2,30 @@
 
 ## Overview
 
-This repository targets AWS. The current runtime architecture is built around:
+This repository targets AWS and is designed around:
 
 - API Gateway HTTP API and Lambda for public webhook ingress
 - ECS Fargate for the worker and `create_sub`
-- S3 for raw, staging, and state storage
-- AWS Secrets Manager for Strava credentials and webhook verification
-- EventBridge Scheduler for optional cron-style worker runs
-- ECR for container images
-- CloudWatch Logs for runtime logs
-- Athena and Glue as an optional SQL/query layer
+- S3 for state, raw files, and staging files
+- Secrets Manager for Strava credentials and webhook verification
+- EventBridge Scheduler as an optional fallback trigger
+- Athena and Glue as an optional SQL and analytics layer
 
-Terraform in [`infra/terraform`](infra/terraform/README.md) is the canonical, preferred, and best-supported way to provision this stack. Manual AWS setup is possible, but the repository documentation assumes Terraform is the default implementation path.
+Terraform in [`infra/terraform`](infra/terraform/README.md) is the canonical and best-supported deployment path.
 
-## Runtime Modes
+## Runtime Surfaces
 
-The container supports three execution modes:
+| Surface | Entry | Deployment Shape | Purpose |
+|---------|-------|------------------|---------|
+| Worker | `python -m app.main worker` | ECS Fargate task | Pull activities from Strava, write raw and staging data, update state, optionally run Athena SQL |
+| Subscription bootstrap | `python -m app.main create_sub` | ECS Fargate task, launched manually | Verify the callback URL and register the Strava push subscription |
+| Webhook ingress | `lambda_src/webhook_handler.lambda_handler` | Lambda behind API Gateway HTTP API | Serve `GET /webhook`, validate `POST /webhook`, trigger the worker via `ecs:RunTask` |
 
-| Mode | Entry Command | Deployment Shape | Purpose |
-|------|---------------|------------------|---------|
-| `worker` | `python -m app.main worker` | ECS Fargate task | Pull activities from Strava, write raw/staging data, update state, optionally run Athena SQL |
-| `webhook` | `lambda_src/webhook_handler.lambda_handler` | Lambda behind API Gateway HTTP API | Handle Strava webhook verification and event delivery, then trigger the worker task with `ecs:RunTask` |
-| `create_sub` | `python -m app.main create_sub` | ECS Fargate task, launched manually | Create or recreate the Strava push subscription |
-
-The legacy Flask webhook entrypoint remains in `app/main.py` only for staged migration and local testing.
+There is no longer a container webhook mode in `app.main`.
 
 ## Recommended Deployment Flow
 
 ### 1. Provision infrastructure with Terraform
-
-Use the configuration in `infra/terraform` as the primary deployment path:
 
 ```bash
 cd infra/terraform
@@ -47,22 +41,21 @@ Terraform creates the AWS resources the application expects, including:
 - ECR repository
 - ECS cluster
 - worker task definition
-- Lambda webhook function and API Gateway HTTP API
-- legacy webhook task definition and ECS service when `enable_legacy_webhook_service = true`
 - `create_sub` task definition
+- Lambda webhook function and API Gateway HTTP API
 - CloudWatch log groups
 - optional EventBridge Scheduler schedule
-- optional Glue catalog database and Athena tables
+- optional Glue database and Athena tables
 
 ### 2. Build and push the container image
 
-Build the image from the repository root:
+Build from the repository root:
 
 ```bash
 docker build -t strava-pipeline:latest .
 ```
 
-Authenticate Docker to ECR, tag the image with the repository URL returned by Terraform, and push it. If you do not set `container_image`, Terraform expects the image to exist at:
+Tag and push the image to the ECR repository returned by `terraform output ecr_repository_url`. If `container_image = ""`, Terraform expects the image at:
 
 ```text
 <terraform output ecr_repository_url>:latest
@@ -70,89 +63,91 @@ Authenticate Docker to ECR, tag the image with the repository URL returned by Te
 
 ### 3. Populate secrets
 
-Terraform creates the secret objects, but it does not fully configure runtime values for you.
+Terraform creates the secret objects, but you still need to populate live values.
 
-Required secrets are based on `SECRET_PREFIX`:
+Default secret names are based on `SECRET_PREFIX`:
 
 | Secret Name Pattern | Used By | Purpose |
 |---------------------|---------|---------|
 | `*-client-id` | `worker`, `create_sub` | Strava OAuth client id |
 | `*-client-secret` | `worker`, `create_sub` | Strava OAuth client secret |
 | `*-auth-state` | `worker` | Refresh token payload, usually JSON with `refresh_token` |
-| `*-webhook-verify-token` | `webhook`, `create_sub` | Token used during Strava webhook verification |
+| `*-webhook-verify-token` | Lambda webhook, `create_sub` | Verification token served during Strava webhook validation |
 
 Notes:
 
 - `SECRET_PREFIX` defaults to `strava`.
 - `bootstrap_secrets = true` can prefill `client_id`, `client_secret`, and `auth_state`.
-- The webhook verify token secret is still expected to be set manually after apply.
-- The worker updates the `*-auth-state` secret when Strava rotates the refresh token.
+- The webhook verify token secret still needs to be populated manually.
+- The worker may update the `*-auth-state` secret if Strava rotates the refresh token.
 
-### 4. Point Strava at the webhook endpoint
+### 4. Register the callback URL in Strava
 
-If `enable_webhook_service = true`, Terraform exposes the webhook through API Gateway HTTP API and outputs the final callback URL automatically. The public callback URL you register with Strava must point to the `/webhook` path on that endpoint.
+Use the Terraform output:
 
-Typical forms are:
+```bash
+terraform output -raw webhook_callback_url
+```
+
+The value will look like:
 
 ```text
 https://<api-id>.execute-api.<region>.amazonaws.com/webhook
 ```
 
-Keep `enable_legacy_webhook_service = true` during rollout if you want the previous ALB/ECS ingress to stay online until Strava is re-registered against the new callback URL.
-
 ### 5. Run `create_sub` once
 
-After the webhook endpoint and verify token are ready, run the `create_sub` task manually. Terraform now injects the callback URL automatically from API Gateway, so this step is mainly about rotating the live Strava subscription to the new ingress.
+After the webhook endpoint and verify token are ready, run the `create_sub` task manually. Terraform injects the callback URL automatically into that task.
 
-Use the `create_subscription_task_definition_arn` output together with the same public subnets and outbound security group pattern used by the worker task.
+Use `create_subscription_task_definition_arn` together with the same public subnets and outbound security group pattern used by the worker task.
 
-## Configuration Contract
+## Runtime Variable Summary
 
-### Core environment variables
+### Worker
 
-These values are injected into containers by Terraform or supplied manually in local development:
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `BUCKET_NAME` | Yes | S3 bucket for pipeline data and state |
+| `AWS_REGION` | Yes | AWS SDK region |
+| `SECRET_PREFIX` | No | Defaults to `strava` |
+| `PIPELINE_QUERY_ENGINE` | No | `none` or `athena` |
+| `ATHENA_DATABASE` | Athena only | Required when Athena is enabled |
+| `ATHENA_OUTPUT_S3` | Athena only | Required when Athena is enabled |
+| `ATHENA_WORKGROUP` | No | Optional |
+| `ATHENA_TIMEOUT_SECONDS` | No | Defaults to `300` |
+| `PIPELINE_SQL_PATH` | No | Defaults to `sql/pipeline_query.sql` in the image |
 
-| Variable | Used By | Required | Notes |
-|----------|---------|----------|-------|
-| `BUCKET_NAME` | `worker` | Yes | S3 bucket for state and pipeline files |
-| `AWS_REGION` | All modes | Yes | AWS SDK region |
-| `SECRET_PREFIX` | All modes | Yes | Defaults to `strava` when omitted |
-| `PIPELINE_QUERY_ENGINE` | `worker` | No | `none` or `athena` |
+### `create_sub`
 
-### Webhook runtime variables
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `AWS_REGION` | Yes | Used by `boto3` |
+| `SECRET_PREFIX` | No | Defaults to `strava` |
+| `WEBHOOK_VERIFY_TOKEN_SECRET` | No | Overrides the default secret name |
+| `WEBHOOK_VERIFY_TOKEN` | No | Optional override or debug path; Secrets Manager is the default source |
+| `WEBHOOK_CALLBACK_URL` | Yes | Injected by Terraform in AWS; set manually only for local runs |
 
-| Variable | Used By | Required | Notes |
-|----------|---------|----------|-------|
-| `ECS_CLUSTER` | `webhook` | Yes | Cluster name for `ecs:RunTask` |
-| `ECS_TASK_DEFINITION` | `webhook` | Yes | Worker task definition ARN |
-| `ECS_SUBNETS` | `webhook` | Yes | Comma-separated subnet ids |
-| `ECS_SECURITY_GROUPS` | `webhook` | Yes | Comma-separated security group ids |
-| `ECS_ASSIGN_PUBLIC_IP` | `webhook` | No | `ENABLED` or `DISABLED` |
-| `ECS_LAUNCH_TYPE` | `webhook` | No | Defaults to `FARGATE` |
-| `WEBHOOK_VERIFY_TOKEN_SECRET` | `webhook`, `create_sub` | No | Overrides the default secret name |
-| `WEBHOOK_VERIFY_TOKEN` | `webhook`, `create_sub` | No | Optional direct override instead of Secrets Manager |
+### Lambda webhook
 
-### Subscription bootstrap variables
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `ECS_CLUSTER` | Yes | ECS cluster used by `ecs:RunTask` |
+| `ECS_TASK_DEFINITION` | Yes | Worker task definition ARN |
+| `ECS_SUBNETS` | Yes | Comma-separated subnet ids |
+| `ECS_SECURITY_GROUPS` | Yes | Comma-separated security group ids |
+| `ECS_ASSIGN_PUBLIC_IP` | No | `ENABLED` or `DISABLED` |
+| `ECS_LAUNCH_TYPE` | No | Defaults to `FARGATE` |
+| `WEBHOOK_VERIFY_TOKEN_SECRET` | No | Default source for verification token |
+| `WEBHOOK_VERIFY_TOKEN` | No | Optional override or debug path; Secrets Manager remains the default |
 
-| Variable | Used By | Required | Notes |
-|----------|---------|----------|-------|
-| `WEBHOOK_CALLBACK_URL` | `create_sub` | Yes | Populated automatically by Terraform from the API Gateway invoke URL |
+Spójność kontraktu wygląda teraz tak:
 
-### Optional Athena variables
-
-These are required only when `PIPELINE_QUERY_ENGINE=athena`:
-
-| Variable | Used By | Required | Notes |
-|----------|---------|----------|-------|
-| `ATHENA_DATABASE` | `worker` | Yes | Glue/Athena database name |
-| `ATHENA_OUTPUT_S3` | `worker` | Yes | Query results bucket/prefix |
-| `ATHENA_WORKGROUP` | `worker` | No | Optional workgroup |
-| `ATHENA_TIMEOUT_SECONDS` | `worker` | No | Defaults to `300` |
-| `PIPELINE_SQL_PATH` | `worker` | No | Defaults to `sql/pipeline_query.sql` inside the container |
+- `AWS_REGION` jest wspólne dla worker, `create_sub`, i Lambdy.
+- `SECRET_PREFIX` jest wspólne dla ścieżek, które czytają sekrety po nazwie.
+- `WEBHOOK_VERIFY_TOKEN` i `WEBHOOK_VERIFY_TOKEN_SECRET` nie dublują się funkcjonalnie: pierwszy to override, drugi to domyślna ścieżka produkcyjna.
+- `WEBHOOK_CALLBACK_URL` nie jest już wejściem Terraforma, tylko wyliczanym outputem i env dla `create_sub`.
 
 ## Data Layout
-
-### S3 object structure
 
 The application writes the following keys under `BUCKET_NAME`:
 
@@ -165,38 +160,8 @@ s3://BUCKET_NAME/
   staging/
     strava/YYYY/MM/DD/activities_<run_id>.jsonl
   main/
-    ... optional Athena-managed output for downstream tables
+    ... optional Athena-managed output
 ```
-
-Important details:
-
-- `state/strava_state.json` is created by the application after the first successful run; no manual seed file is required.
-- `raw/` stores append-only envelopes with the original activity JSON.
-- `staging/` stores flattened activity rows used by Athena.
-- `main/` is only relevant when your SQL pipeline materializes output there.
-
-### Athena and Glue
-
-If `pipeline_query_engine = "athena"`:
-
-- Terraform creates a Glue database.
-- Terraform creates `strava_raw_ext` over `s3://<bucket>/staging/strava/`.
-- Terraform creates `strava_main` over `s3://<bucket>/main/`.
-- The worker executes `sql/pipeline_query.sql` after raw/staging writes and state update.
-
-If `pipeline_query_engine = "none"`, the worker skips the SQL step.
-
-## IAM and Access Expectations
-
-Terraform provisions the roles used by ECS tasks and the optional scheduler. In practical terms:
-
-- the worker task can read and write the S3 bucket
-- the worker task can read Strava secrets and update `*-auth-state`
-- the Lambda webhook can read the webhook verify token secret
-- the Lambda webhook can call `ecs:RunTask` for the worker task definition
-- the scheduler role can run the worker task when scheduling is enabled
-
-Manual deployments should preserve the same least-privilege shape.
 
 ## Local Development
 
@@ -206,11 +171,7 @@ Manual deployments should preserve the same least-privilege shape.
 pip install -r requirements.txt
 ```
 
-You also need AWS credentials available to `boto3`, for example via:
-
-- `aws configure`
-- `aws sso login`
-- `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+You also need AWS credentials available to `boto3`.
 
 ### Example `.env`
 
@@ -219,59 +180,53 @@ AWS_REGION=eu-north-1
 BUCKET_NAME=my-strava-pipeline-bucket
 SECRET_PREFIX=strava
 PIPELINE_QUERY_ENGINE=none
-WEBHOOK_CALLBACK_URL=http://localhost:8080/webhook
+WEBHOOK_CALLBACK_URL=https://example.execute-api.eu-north-1.amazonaws.com/webhook
 WEBHOOK_VERIFY_TOKEN=local-test-token
-ECS_CLUSTER=strava-pipeline-cluster
-ECS_TASK_DEFINITION=strava-pipeline-worker
-ECS_SUBNETS=subnet-123,subnet-456
-ECS_SECURITY_GROUPS=sg-123
-ECS_ASSIGN_PUBLIC_IP=ENABLED
 ```
 
 ### Local entry commands
 
 ```bash
 python -m app.main worker
-python -m app.main webhook
 python -m app.main create_sub
 ```
 
 Notes:
 
 - `worker` needs live AWS access for S3 and Secrets Manager.
-- `webhook` can still run locally for endpoint testing, but production ingress is now API Gateway plus Lambda.
 - `create_sub` calls the live Strava push subscription API.
+- The production webhook is Lambda-backed; local webhook simulation should be done by invoking `lambda_src/webhook_handler.lambda_handler` with a sample event, not by running a Flask service.
 
 ## Troubleshooting
 
-### Webhook receives verification traffic but returns `403`
+### Webhook verification fails
 
-- confirm the callback URL registered with Strava matches the API Gateway webhook output
+- confirm the callback URL registered with Strava matches `terraform output -raw webhook_callback_url`
 - confirm the stored `*-webhook-verify-token` value matches the token used during subscription creation
 - confirm `WEBHOOK_VERIFY_TOKEN_SECRET` points at the expected secret name if you overrode defaults
+- if you are testing locally, remember that `WEBHOOK_VERIFY_TOKEN` is only an override path
 
 ### Webhook accepts requests but does not trigger the worker
 
-- confirm `ECS_CLUSTER`, `ECS_TASK_DEFINITION`, `ECS_SUBNETS`, and `ECS_SECURITY_GROUPS` are present in the webhook task environment
-- confirm the task role still has `ecs:RunTask` and `iam:PassRole`
+- confirm `ECS_CLUSTER`, `ECS_TASK_DEFINITION`, `ECS_SUBNETS`, and `ECS_SECURITY_GROUPS` are present in the Lambda environment
 - confirm the Lambda IAM role still has `ecs:RunTask` and `iam:PassRole`
+- confirm the worker task definition ARN in Lambda matches the active worker revision
 
 ### Worker fails before reading activities
 
-- confirm `BUCKET_NAME`, `AWS_REGION`, and the Secrets Manager values exist
-- confirm `*-auth-state` contains either a raw refresh token or JSON with `refresh_token`
+- confirm `BUCKET_NAME`, `AWS_REGION`, and the required Secrets Manager values exist
+- confirm `*-auth-state` contains a refresh token payload
 - confirm the worker task role can read the required secrets
 
-### Worker writes raw/staging files but fails during SQL
+### Worker writes raw or staging files but fails during SQL
 
 - confirm `PIPELINE_QUERY_ENGINE=athena`
 - confirm `ATHENA_DATABASE` and `ATHENA_OUTPUT_S3` are set
 - confirm the Glue database and tables exist in the same AWS account and region
-- confirm the worker task role has Athena and Glue read permissions
 
 ### `create_sub` fails
 
 - confirm the API Gateway endpoint is publicly reachable
 - confirm `WEBHOOK_CALLBACK_URL` ends with `/webhook`
-- confirm the verify token used for creation matches the value served by the webhook
+- confirm the verify token used for creation matches the value served by the Lambda webhook
 - confirm the Strava client id and client secret secrets are populated

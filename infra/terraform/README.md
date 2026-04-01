@@ -1,6 +1,6 @@
 # Terraform Deployment for Strava Pipeline
 
-This directory is the canonical, preferred, and best-supported way to provision the Strava Pipeline on AWS.
+This directory is the canonical and best-supported way to provision the Strava Pipeline on AWS.
 
 The Terraform configuration matches the current application architecture:
 
@@ -20,7 +20,7 @@ This stack assumes you already have:
 - public subnets with outbound internet access
 - AWS credentials available to Terraform
 
-It does not create the VPC, subnet layout, Route 53 records, or ACM certificates for you.
+It does not create the VPC, subnet layout, Route 53 records, or custom domains for you.
 
 ## What Terraform Creates
 
@@ -35,12 +35,11 @@ The configuration in this folder provisions:
 - one ECR repository for the application image
 - one ECS cluster
 - one worker task definition that runs `python -m app.main worker`
+- one `create_sub` task definition that runs `python -m app.main create_sub`
 - one Lambda function for the public webhook ingress
 - one API Gateway HTTP API exposing `GET /webhook` and `POST /webhook`
-- one legacy webhook task definition and ECS service when `enable_legacy_webhook_service = true`
-- one `create_sub` task definition that runs `python -m app.main create_sub`
-- CloudWatch log groups for worker, legacy webhook, and Lambda ingress
-- IAM roles and policies for ECS execution, worker runtime, and the optional scheduler
+- CloudWatch log groups for the worker and Lambda ingress
+- IAM roles and policies for ECS execution, worker runtime, Lambda webhook, and the optional scheduler
 - one EventBridge Scheduler schedule when enabled
 - one Glue catalog database and two Athena tables when `pipeline_query_engine = "athena"`
 
@@ -58,25 +57,20 @@ project_name      = "strava-pipeline"
 vpc_id            = "vpc-xxxxxxxx"
 public_subnet_ids = ["subnet-aaaaaaaa", "subnet-bbbbbbbb"]
 
-bucket_name       = "my-unique-strava-pipeline-bucket"
-secret_prefix     = "strava"
+bucket_name = "my-unique-strava-pipeline-bucket"
+secret_prefix = "strava"
 
 enable_webhook_service = true
-enable_legacy_webhook_service = true
 enable_schedule        = false
 
 pipeline_query_engine = "none"
 container_image       = ""
-
-webhook_callback_url  = ""
-webhook_certificate_arn = ""
 ```
 
 Notes:
 
 - `container_image = ""` means Terraform will point ECS at `<ecr_repository_url>:latest`.
-- `enable_legacy_webhook_service = true` keeps the ALB/ECS webhook alive during staged migration.
-- `webhook_callback_url` and `webhook_certificate_arn` are deprecated compatibility inputs and are not used by the Lambda-backed ingress.
+- `enable_webhook_service = true` keeps the Lambda-backed public webhook enabled.
 
 ### 2. Initialize and review the plan
 
@@ -111,18 +105,14 @@ Important outputs include:
 
 ## Required Inputs
 
-These values are required for a meaningful deployment:
-
 | Variable | Purpose |
 |----------|---------|
 | `aws_region` | AWS provider region |
-| `vpc_id` | Existing VPC for ECS and ALB resources |
-| `public_subnet_ids` | Existing public subnets used by ALB, ECS service, and ECS tasks |
+| `vpc_id` | Existing VPC for the ECS security group |
+| `public_subnet_ids` | Existing public subnets used by ECS tasks |
 | `bucket_name` | S3 bucket name for state, raw, and staging data |
 
 ## Important Optional Inputs
-
-Use these to shape the deployment:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -132,9 +122,6 @@ Use these to shape the deployment:
 | `task_cpu` | `256` | CPU for ECS task definitions |
 | `task_memory` | `512` | Memory for ECS task definitions |
 | `enable_webhook_service` | `true` | Create the Lambda-backed public webhook ingress |
-| `enable_legacy_webhook_service` | `true` | Keep the ALB/ECS webhook alive during staged migration |
-| `webhook_desired_count` | `1` | Deprecated legacy ECS webhook desired count |
-| `webhook_cooldown_seconds` | `180` | Deprecated legacy ECS webhook cooldown |
 | `enable_schedule` | `false` | Create an EventBridge Scheduler job for the worker |
 | `schedule_expression` | `rate(1 hour)` | Scheduler expression in UTC |
 | `assign_public_ip` | `ENABLED` | Public IP behavior for ECS tasks |
@@ -143,19 +130,19 @@ Use these to shape the deployment:
 | `athena_output_s3` | `""` | Required when Athena is enabled |
 | `athena_workgroup` | `""` | Optional Athena workgroup |
 | `athena_timeout_seconds` | `300` | Athena polling timeout for the worker |
-| `pipeline_sql_path` | `""` | Optional override for SQL file path inside the container |
-| `app_env` | `{}` | Extra environment variables passed into the application containers |
+| `pipeline_sql_path` | `""` | Optional override for the SQL file path inside the container |
+| `app_env` | `{}` | Extra environment variables passed into application containers |
 | `tags` | `{}` | Extra AWS tags |
 
-## Feature Flags and Modes
+## Webhook and Runtime Contract
 
-### Webhook service
+### Webhook ingress
 
 `enable_webhook_service = true` creates:
 
 - a Lambda webhook handler
 - an API Gateway HTTP API exposing `GET /webhook` and `POST /webhook`
-- a callback URL output for Strava registration
+- a computed callback URL output for Strava registration
 
 The Lambda webhook:
 
@@ -163,7 +150,36 @@ The Lambda webhook:
 - serves `POST /webhook` for Strava events
 - runs `ecs:RunTask` against the worker task definition
 
-`enable_legacy_webhook_service = true` additionally keeps the previous ALB/ECS webhook stack alive for rollout safety. Disable it after Strava is re-registered against the new callback URL.
+### Runtime variables injected by Terraform
+
+Worker containers receive:
+
+- `BUCKET_NAME`
+- `AWS_REGION`
+- `SECRET_PREFIX`
+- `PIPELINE_QUERY_ENGINE`
+- optional `ATHENA_*` variables
+
+The Lambda webhook receives:
+
+- `ECS_CLUSTER`
+- `ECS_TASK_DEFINITION`
+- `ECS_SUBNETS`
+- `ECS_SECURITY_GROUPS`
+- `ECS_ASSIGN_PUBLIC_IP`
+- `ECS_LAUNCH_TYPE`
+- `WEBHOOK_VERIFY_TOKEN_SECRET`
+
+The `create_sub` task receives:
+
+- the same shared runtime values as the worker where relevant
+- `WEBHOOK_VERIFY_TOKEN_SECRET`
+- `WEBHOOK_CALLBACK_URL`
+
+Notes on consistency:
+
+- `WEBHOOK_CALLBACK_URL` is no longer a Terraform input. It is derived from the API Gateway endpoint and injected into `create_sub`.
+- `WEBHOOK_VERIFY_TOKEN` is not injected by default. It remains an optional runtime override and debug path; the standard production path is Secrets Manager via `WEBHOOK_VERIFY_TOKEN_SECRET`.
 
 ### Scheduled runs
 
@@ -181,7 +197,7 @@ It also injects the Athena environment variables the worker expects so `app/stag
 
 ## Secret Handling
 
-Terraform creates the Secrets Manager objects but does not fully populate live values for you by default.
+Terraform creates the Secrets Manager objects but does not fully populate live values by default.
 
 Default secret names are:
 
@@ -217,13 +233,9 @@ Important:
 
 ## Post-Apply Steps
 
-Terraform provisions infrastructure, but a working pipeline still needs a few operational steps.
-
 ### 1. Push the container image
 
 Build the image from the repository root and push it to the ECR repository returned by `terraform output ecr_repository_url`.
-
-If you rely on the default image path, push the image with the `latest` tag.
 
 ### 2. Populate secrets
 
@@ -234,7 +246,7 @@ Set values for:
 - `<secret_prefix>-auth-state`
 - `<secret_prefix>-webhook-verify-token`
 
-### 3. Finalize the webhook URL
+### 3. Register the callback URL
 
 Use the `webhook_callback_url` output returned by Terraform. The Strava callback must end with:
 
@@ -244,7 +256,7 @@ Use the `webhook_callback_url` output returned by Terraform. The Strava callback
 
 ### 4. Run the subscription bootstrap task
 
-Launch the `create_sub` task definition manually after the callback URL and verify token are ready. This recreates the live Strava subscription against the new API Gateway ingress.
+Launch the `create_sub` task definition manually after the callback URL and verify token are ready.
 
 Example AWS CLI shape:
 
@@ -256,28 +268,7 @@ aws ecs run-task \
   --network-configuration 'awsvpcConfiguration={subnets=["subnet-aaaa","subnet-bbbb"],securityGroups=["sg-aaaa"],assignPublicIp="ENABLED"}'
 ```
 
-Use the same public subnets as `public_subnet_ids` and a security group with outbound internet access. The `worker_security_group_id` output is a suitable default for this task.
-
-## Runtime Contract Created by Terraform
-
-Terraform injects the application settings the current code expects:
-
-- `BUCKET_NAME`
-- `AWS_REGION`
-- `SECRET_PREFIX`
-- `PIPELINE_QUERY_ENGINE`
-- optional Athena variables
-- webhook Lambda trigger variables:
-  - `ECS_CLUSTER`
-  - `ECS_TASK_DEFINITION`
-  - `ECS_SUBNETS`
-  - `ECS_SECURITY_GROUPS`
-  - `ECS_ASSIGN_PUBLIC_IP`
-  - `ECS_LAUNCH_TYPE`
-  - `WEBHOOK_VERIFY_TOKEN_SECRET`
-- `WEBHOOK_CALLBACK_URL` for `create_sub`
-
-This is why Terraform is the best-supported implementation path for this repository: the infrastructure code and the Python runtime contract are already aligned.
+Use the same public subnets as `public_subnet_ids` and a security group with outbound internet access. `worker_security_group_id` is a suitable default for this task.
 
 ## What Terraform Does Not Do
 
@@ -285,30 +276,9 @@ This configuration intentionally does not:
 
 - build or push Docker images
 - create the VPC or subnets
-- create Route 53 records
+- create Route 53 records or custom domains
 - populate the webhook verify token automatically
 - execute the `create_sub` task for you
 - guarantee teardown of the S3 bucket during `terraform destroy`
 
 The S3 bucket has `prevent_destroy = true`, so destructive cleanup must be handled deliberately.
-
-## Notes for Operators
-
-- The worker stores its state in `s3://<bucket>/state/strava_state.json`.
-- Raw files are written under `s3://<bucket>/raw/strava/YYYY/MM/DD/`.
-- Staging files are written under `s3://<bucket>/staging/strava/YYYY/MM/DD/`.
-- CloudWatch log groups are `/ecs/<project>-worker`, `/ecs/<project>-webhook` for the legacy ingress, and `/aws/lambda/<project>-webhook` for the Lambda ingress.
-- The worker and `create_sub` task definitions share the existing ECS runtime IAM role, while the Lambda webhook gets its own least-privilege IAM role.
-
-## Common Workflow
-
-For most deployments, the end-to-end sequence is:
-
-1. Fill `terraform.tfvars`.
-2. Run `terraform init`, `terraform plan`, and `terraform apply`.
-3. Push the image to ECR.
-4. Store the secret values in Secrets Manager.
-5. Confirm the API Gateway webhook endpoint is reachable.
-6. Run the `create_sub` task once to repoint Strava at the new callback URL.
-7. Disable `enable_legacy_webhook_service` and apply again after validating the Lambda ingress.
-8. Optionally enable the scheduler and Athena mode.
