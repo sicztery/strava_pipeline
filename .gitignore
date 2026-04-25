@@ -8,4 +8,5 @@ venv/
 *.tfstate
 *.tfstate.*
 *.tfvars
+*.auto.tfvars.json
 *.exe

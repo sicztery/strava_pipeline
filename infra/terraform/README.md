@@ -237,6 +237,13 @@ Important:
 
 Build the image from the repository root and push it to the ECR repository returned by `terraform output ecr_repository_url`.
 
+For repeatable application rollouts, prefer:
+
+1. push the commit so `.github/workflows/deploy.yml` publishes both `:latest` and `:<git-sha-12>`
+2. run `scripts/deploy-worker.ps1 -ImageTag <git-sha-12>` locally
+
+That script writes a local `deploy.auto.tfvars.json`, runs `terraform apply`, and verifies that the Lambda webhook points at the new worker task definition ARN.
+
 ### 2. Populate secrets
 
 Set values for:

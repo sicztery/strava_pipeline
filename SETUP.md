@@ -61,6 +61,13 @@ Tag and push the image to the ECR repository returned by `terraform output ecr_r
 <terraform output ecr_repository_url>:latest
 ```
 
+For routine rollouts, prefer the immutable-tag flow:
+
+1. push the commit so GitHub Actions publishes `<ecr_repository_url>:<git-sha-12>`
+2. run `scripts/deploy-worker.ps1 -ImageTag <git-sha-12>` locally
+
+The script writes a local `deploy.auto.tfvars.json`, runs `terraform apply`, and verifies that the Lambda webhook now points to the new worker task definition ARN.
+
 ### 3. Populate secrets
 
 Terraform creates the secret objects, but you still need to populate live values.
@@ -223,6 +230,7 @@ Notes:
 - confirm `PIPELINE_QUERY_ENGINE=athena`
 - confirm `ATHENA_DATABASE` and `ATHENA_OUTPUT_S3` are set
 - confirm the Glue database and tables exist in the same AWS account and region
+- confirm the deployed worker revision matches the image tag you intended by checking `scripts/deploy-worker.ps1` output or the Lambda `ECS_TASK_DEFINITION` env var
 
 ### `create_sub` fails
 

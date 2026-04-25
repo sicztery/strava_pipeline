@@ -12,7 +12,6 @@ permissions:
 env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: strava-pipeline
-  IMAGE_TAG: latest
 
 jobs:
   build:
@@ -27,11 +26,14 @@ jobs:
           role-to-assume: arn:aws:iam::675715936284:role/strava-pipeline-trigger
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Set image URI
+      - name: Set image URIs
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE_TAG="${GITHUB_SHA::12}"
           echo "ECR_REGISTRY=$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com" >> $GITHUB_ENV
-          echo "IMAGE_URI=$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "IMAGE_URI_SHA=$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:$IMAGE_TAG" >> $GITHUB_ENV
+          echo "IMAGE_URI_LATEST=$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest" >> $GITHUB_ENV
 
       - name: Login to ECR
         run: |
@@ -39,5 +41,17 @@ jobs:
 
       - name: Build and push image
         run: |
-          docker build -t $IMAGE_URI .
-          docker push $IMAGE_URI
+          docker build -t $IMAGE_URI_SHA -t $IMAGE_URI_LATEST .
+          docker push $IMAGE_URI_SHA
+          docker push $IMAGE_URI_LATEST
+
+      - name: Publish deployment summary
+        run: |
+          {
+            echo "### Image published"
+            echo
+            echo "- immutable tag: \`$IMAGE_URI_SHA\`"
+            echo "- mutable tag: \`$IMAGE_URI_LATEST\`"
+            echo
+            echo "Run \`scripts/deploy-worker.ps1 -ImageTag $IMAGE_TAG\` locally to register a new ECS task definition revision and update the Lambda webhook."
+          } >> "$GITHUB_STEP_SUMMARY"
