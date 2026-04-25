@@ -1,6 +1,7 @@
-import os
 import logging
+import os
 import time
+import hashlib
 import boto3
 
 logger = logging.getLogger("strava_pipeline")
@@ -53,7 +54,12 @@ def execute_pipeline_query(run_id: str) -> None:
     sql_query = sql_query.replace("${DATABASE}", database)
     sql_query = sql_query.replace("${DATASET}", database)
 
-    logger.info(f"{run_id} | PIPELINE_QUERY | START | Athena query execution")
+    sql_fingerprint = hashlib.sha256(sql_query.encode("utf-8")).hexdigest()[:12]
+
+    logger.info(
+        f"{run_id} | PIPELINE_QUERY | START | Athena query execution | "
+        f"sql_path={sql_path} | sql_sha256={sql_fingerprint}"
+    )
 
     client = _athena_client()
     params = {
