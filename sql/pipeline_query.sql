@@ -1,5 +1,5 @@
 -- Athena / Trino SQL
-INSERT INTO "${DATABASE}"."strava_main" (
+INSERT INTO "${DATABASE}"."strava_main_iceberg" (
   activity_id,
   activity_name,
   activity_type,
@@ -72,6 +72,6 @@ coalesce(
 FROM "${DATABASE}"."strava_raw_ext" r
 WHERE NOT EXISTS (
   SELECT 1
-  FROM "${DATABASE}"."strava_main" m
+  FROM "${DATABASE}"."strava_main_iceberg" m
   WHERE m.activity_id = try_cast(r.activity_id AS bigint)
 );

@@ -10,16 +10,7 @@ def fetch_activities(
     per_page: int = 200,
     page: int = 1
 ) -> List[Dict]:
-    """
-    Fetches activities from Strava API.
-
-    WARNING:
-    - Does NOT guarantee order
-    - Does NOT filter by time
-    - after_timestamp is just a hint to the API
     
-    """
-
     if not access_token:
         raise ValueError("Missing access_token")
 
